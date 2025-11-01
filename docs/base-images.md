@@ -20,9 +20,9 @@ Where these are referenced in the repository
   const ODYN_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/odyn:latest";
   const SLEEVE_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/enclaver-wrapper-base:latest";
 
-- The multi-stage Dockerfile `build/dockerfiles/runtimebase.dockerfile` uses the `nitro-cli` image as a build source and copies runtime libraries and `/usr/bin/nitro-cli` from it into the runtime image.
+- The multi-stage Dockerfile `dockerfiles/runtimebase.dockerfile` uses the `nitro-cli` image as a build source and copies runtime libraries and `/usr/bin/nitro-cli` from it into the runtime image.
 
-- The dev helper `build/local_image_deps.sh` builds local dev images `odyn-dev:latest` and `enclaver-wrapper-base:latest` for local development.
+- The dev helper `scripts/build-docker-images.sh` builds local dev images `odyn-dev:latest` and `enclaver-wrapper-base:latest` for local development.
 
 What each image is for (summary)
 --------------------------------
@@ -111,7 +111,7 @@ Inspecting the EIF conversion step
 
 Dev / local images
 -------------------
-- `build/local_image_deps.sh` builds local dev images to avoid pulling the remote published images during development. It builds multi-arch crate binaries (via cargo cross-compile target selection) and then builds two dev images:
+`scripts/build-docker-images.sh` builds local dev images to avoid pulling the remote published images during development. It builds multi-arch crate binaries (via cargo cross-compile target selection) and then builds two dev images:
   - `odyn-dev:latest`
   - `enclaver-wrapper-base:latest` (local sleeve base tag)
 

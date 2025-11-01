@@ -4,33 +4,54 @@ This document shows the exact local steps used by the repository to build the de
 
 Prerequisites
 - Docker with BuildKit / buildx enabled (or an alternative builder that supports multi-arch and build stages).
-- Rust toolchain and musl targets available for your architecture (the helper script chooses a target based on `uname -m`).
+- `cross` installed (the helper script uses cross to build Rust artifacts for musl targets).
+- A C compiler/linker on the host (required to install `cross`).
 
 ```bash
+# Install Rust toolchain
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 
+# Install build-essential (provides C compiler needed by cargo install)
 sudo apt-get update
 sudo apt-get install -y build-essential
 
+# Install cross for cross-compilation
 cargo install cross
+
+# Install Docker (if not already installed)
 ./scripts/install-docker.sh
 ```
 
 Quick (one-command) local build
 
-Run this from the repository root:
+Run this from the repository root to build debug images (default):
 
 ```bash
-./scripts/build-dev-images.sh
+./scripts/build-docker-images.sh
+```
+
+Or build optimized release images:
+
+```bash
+./scripts/build-docker-images.sh --release
+```
+
+For help and available options:
+
+```bash
+./scripts/build-docker-images.sh --help
 ```
 
 What the script does
-- Compiles `odyn` and `enclaver-run` for your machine architecture (using musl targets).
+- Requires `cross` to be installed and Docker to be running.
+- Compiles `odyn` and `enclaver-run` for your machine architecture using musl targets.
+  - Debug mode (default): faster compilation, larger binaries with debug symbols.
+  - Release mode (`--release`): optimized binaries, slower compilation.
 - Creates a temporary docker build context containing the compiled binaries.
 - Builds the dev images using these Dockerfiles:
-  - `build/dockerfiles/odyn-dev.dockerfile`
-  - `build/dockerfiles/runtimebase-dev.dockerfile`
+  - `dockerfiles/odyn-dev.dockerfile`
+  - `dockerfiles/runtimebase-dev.dockerfile`
 
 After running the helper, you will have these images locally:
 
@@ -39,20 +60,40 @@ After running the helper, you will have these images locally:
 
 Manual steps (if you want to run each step yourself)
 
-1) Build the Rust binaries (example for x86_64):
+1) Build the Rust binaries with `cross` (example for x86_64, debug mode):
 
 ```bash
 cd enclaver
-cargo build --target x86_64-unknown-linux-musl --features run_enclave,odyn
+cross build --target x86_64-unknown-linux-musl --features run_enclave,odyn
+```
+
+For release mode:
+
+```bash
+cross build --target x86_64-unknown-linux-musl --features run_enclave,odyn --release
 ```
 
 2) Build `odyn-dev` (create a small context and build):
+
+Debug binaries:
 
 ```bash
 docker_build_dir=$(mktemp -d)
 cp ./target/x86_64-unknown-linux-musl/debug/odyn "${docker_build_dir}/"
 docker buildx build \
-  -f build/dockerfiles/odyn-dev.dockerfile \
+  -f dockerfiles/odyn-dev.dockerfile \
+  -t odyn-dev:latest \
+  "${docker_build_dir}"
+rm -rf "${docker_build_dir}"
+```
+
+Release binaries:
+
+```bash
+docker_build_dir=$(mktemp -d)
+cp ./target/x86_64-unknown-linux-musl/release/odyn "${docker_build_dir}/"
+docker buildx build \
+  -f dockerfiles/odyn-dev.dockerfile \
   -t odyn-dev:latest \
   "${docker_build_dir}"
 rm -rf "${docker_build_dir}"
@@ -60,11 +101,25 @@ rm -rf "${docker_build_dir}"
 
 3) Build `enclaver-wrapper-base` (dev):
 
+Debug binaries:
+
 ```bash
 docker_build_dir=$(mktemp -d)
 cp ./target/x86_64-unknown-linux-musl/debug/enclaver-run "${docker_build_dir}/"
 docker buildx build \
-  -f build/dockerfiles/runtimebase-dev.dockerfile \
+  -f dockerfiles/runtimebase-dev.dockerfile \
+  -t enclaver-wrapper-base:latest \
+  "${docker_build_dir}"
+rm -rf "${docker_build_dir}"
+```
+
+Release binaries:
+
+```bash
+docker_build_dir=$(mktemp -d)
+cp ./target/x86_64-unknown-linux-musl/release/enclaver-run "${docker_build_dir}/"
+docker buildx build \
+  -f dockerfiles/runtimebase-dev.dockerfile \
   -t enclaver-wrapper-base:latest \
   "${docker_build_dir}"
 rm -rf "${docker_build_dir}"
@@ -72,8 +127,8 @@ rm -rf "${docker_build_dir}"
 
 Notes about release Dockerfiles
 - The release Dockerfiles are written for multi-stage CI builds where an `artifacts` stage provides `${TARGETARCH}/odyn` and `${TARGETARCH}/enclaver-run`.
-  - `build/dockerfiles/runtimebase.dockerfile` uses `FROM public.ecr.aws/.../nitro-cli:latest AS nitro_cli` to copy necessary runtime libraries and `/usr/bin/nitro-cli` into the final image stage. It then expects an `artifacts` stage with `${TARGETARCH}/enclaver-run`.
-  - `build/dockerfiles/odyn-release.dockerfile` similarly expects `${TARGETARCH}/odyn` from the `artifacts` stage.
+  - `dockerfiles/runtimebase.dockerfile` uses `FROM public.ecr.aws/.../nitro-cli:latest AS nitro_cli` to copy necessary runtime libraries and `/usr/bin/nitro-cli` into the final image stage. It then expects an `artifacts` stage with `${TARGETARCH}/enclaver-run`.
+  - `dockerfiles/odyn-release.dockerfile` similarly expects `${TARGETARCH}/odyn` from the `artifacts` stage.
 
 If you want to produce release images locally, you need to create a multi-stage build that defines the `artifacts` stage (for example, using a small Dockerfile or `docker buildx build` with an appropriate context and stages).
 
@@ -87,11 +142,21 @@ public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest
 If you need to rebuild nitro-cli from source, obtain the upstream sources and build/publish that image separately.
 
 Tips & troubleshooting
-- If `docker buildx` fails, ensure you have BuildKit enabled. On Docker Desktop, enable experimental features or create a buildx builder:
+- **Missing `cross`**: Install it with `cargo install cross`. If that fails with "linker `cc` not found", install `build-essential` first: `sudo apt-get install -y build-essential`.
+
+- **Missing `protoc`** (prost-build errors): The `cross` build images usually include `protoc`, but if you encounter errors about missing protobuf compiler:
+  - Place a prebuilt `protoc` binary under `enclaver/build/protoc/protoc` and set `PROTOC=/project/enclaver/build/protoc/protoc` before running `cross`.
+  - Or use a custom cross image that has `protoc` pre-installed.
+
+- **Docker buildx failures**: Ensure BuildKit is enabled. On Docker Desktop, enable experimental features or create a buildx builder:
 
 ```bash
 docker buildx create --use
 ```
+
+- **Build mode selection**:
+  - Use `--debug` (or omit flag) for faster compilation with debug symbols (useful during development).
+  - Use `--release` for optimized, smaller binaries (slower to compile, recommended for production-like testing).
 
 - On macOS with Apple Silicon, ensure you build for the correct `--platform` or run the helper script from an x86_64 runner if you need x86 images.
 
