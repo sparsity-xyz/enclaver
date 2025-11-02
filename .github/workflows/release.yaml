@@ -131,13 +131,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      - name: Authenticate to AWS
+      - name: Configure AWS credentials from OIDC
         uses: aws-actions/configure-aws-credentials@v5
         with:
           aws-region: us-east-1
           role-to-assume: arn:aws:iam::004118891089:role/Github-Workflow-Publish-AWS-ECR
 
-      - name: Configure AWS Docker Auth
+      - name: Login to Amazon ECR Public
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
         with:
