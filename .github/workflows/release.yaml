@@ -6,6 +6,20 @@ on:
       - main
     tags:
       - v*
+  workflow_dispatch:
+    inputs:
+      publish_images:
+        description: 'Set to "true" to run the publish-images job when manually triggered'
+        required: false
+        default: 'false'
+      upload_artifacts:
+        description: 'Set to "true" to run the upload-release-artifact job when manually triggered'
+        required: false
+        default: 'false'
+      repo:
+        description: 'Repository to use for publish/upload checks (owner/repo). Useful for testing.'
+        required: false
+        default: 'sparsity-xyz/enclaver'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -84,7 +98,9 @@ jobs:
 
 
   publish-images:
-    if: github.repository == 'enclaver-io/enclaver' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')
+    if: >
+      (github.repository == 'sparsity-xyz/enclaver' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag'))
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_images == 'true')
     needs: build-release-binaries
     runs-on: ubuntu-latest
 
@@ -188,7 +204,9 @@ jobs:
           push-to-registry: true
 
   upload-release-artifact:
-    if: github.repository == 'enclaver-io/enclaver' && github.ref_type == 'tag'
+    if: >
+      (github.repository == 'sparsity-xyz/enclaver' && github.ref_type == 'tag')
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.upload_artifacts == 'true')
     needs: build-release-binaries
     runs-on: ubuntu-latest
 
