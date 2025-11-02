@@ -147,12 +147,20 @@ enclaver_dir="$(dirname $(dirname ${BASH_SOURCE[0]}))/enclaver"
 odyn_tag="odyn-dev:latest"
 wrapper_base_tag="enclaver-wrapper-base-dev:latest"
 
+# Dockerfile names (set per BUILD_MODE below)
+odyn_dockerfile="odyn-dev.dockerfile"
+runtimebase_dockerfile="runtimebase-dev.dockerfile"
+
 # Set build mode-specific variables
 if [ "$BUILD_MODE" = "release" ]; then
     rust_target_dir="./target/${rust_target}/release"
     CROSS_BUILD_FLAGS="--release"
+
+    # update variables for release images
     odyn_tag="odyn:latest"
     wrapper_base_tag="enclaver-wrapper-base:latest"
+    odyn_dockerfile="odyn-release.dockerfile"
+    runtimebase_dockerfile="runtimebase-release.dockerfile"
     echo "Build mode: RELEASE (optimized)"
 else
     rust_target_dir="./target/${rust_target}/debug"
@@ -186,13 +194,14 @@ echo "Copying built artifacts from: ${rust_target_dir}"
 cp $rust_target_dir/odyn $docker_build_dir/
 cp $rust_target_dir/enclaver-run $docker_build_dir/
 
+echo "Building images using Dockerfiles: ${odyn_dockerfile}, ${runtimebase_dockerfile}"
 docker buildx build \
-    -f ../dockerfiles/odyn-dev.dockerfile \
+    -f ../dockerfiles/${odyn_dockerfile} \
     -t ${odyn_tag} \
     ${docker_build_dir}
 
 docker buildx build \
-    -f ../dockerfiles/runtimebase-dev.dockerfile \
+    -f ../dockerfiles/${runtimebase_dockerfile} \
     -t ${wrapper_base_tag} \
     ${docker_build_dir}
 
