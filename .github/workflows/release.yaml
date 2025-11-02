@@ -3,7 +3,7 @@ name: Build Release
 on:
   push:
     branches:
-      - main
+      - sparsity
     tags:
       - v*
   workflow_dispatch:
@@ -99,7 +99,7 @@ jobs:
 
   publish-images:
     if: >
-      (github.repository == 'sparsity-xyz/enclaver' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag'))
+      (github.repository == 'sparsity-xyz/enclaver' && (github.ref == 'refs/heads/sparsity' || github.ref_type == 'tag'))
       || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_images == 'true')
     needs: build-release-binaries
     runs-on: ubuntu-latest
@@ -110,8 +110,8 @@ jobs:
       attestations: 'write'
 
     env:
-      ODYN_IMAGE: public.ecr.aws/s2t1d4c6/enclaver-io/odyn
-      RUNTIME_BASE_IMAGE: public.ecr.aws/s2t1d4c6/enclaver-io/enclaver-wrapper-base
+      ODYN_IMAGE: public.ecr.aws/d4t4u8d2/sparsity-ai/odyn
+      RUNTIME_BASE_IMAGE: public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base
 
     steps:
       - name: Download Binaries
@@ -135,7 +135,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v5
         with:
           aws-region: us-east-1
-          role-to-assume: arn:aws:iam::077296892761:role/EnclaverGitHubActionsRegistryPush
+          role-to-assume: arn:aws:iam::004118891089:role/Github-Workflow-Publish-AWS-ECR
 
       - name: Configure AWS Docker Auth
         id: login-ecr

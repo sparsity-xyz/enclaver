@@ -1,6 +1,12 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - sparsity
+  pull_request:
+    branches:
+      - sparsity
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
