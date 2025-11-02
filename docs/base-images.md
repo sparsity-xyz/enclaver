@@ -9,16 +9,18 @@ Overview
 Enclaver uses three primary base images in its build and runtime flow. The repository references these images as defaults when a manifest doesn't override them. The images are published under the public ECR hostname used in this project.
 
 - Nitro CLI image: `public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest`
--- ODYN image (supervisor): `public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest`
--- Sleeve / wrapper base image: `public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base:latest`
+- ODYN image (supervisor): `public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest`
+- Sleeve / wrapper base image: `public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base:latest`
 
 Where these are referenced in the repository
 -----------------------------------------
 - `enclaver/src/build.rs` contains the defaults used by `EnclaveArtifactBuilder`:
 
+```rust
   const NITRO_CLI_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest";
   const ODYN_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest";
   const SLEEVE_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base:latest";
+```
 
 - The multi-stage Dockerfile `dockerfiles/runtimebase-release.dockerfile` uses the `nitro-cli` image as a build source and copies runtime libraries and `/usr/bin/nitro-cli` from it into the runtime image.
 
