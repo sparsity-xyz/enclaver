@@ -142,14 +142,17 @@ case $local_arch in
         ;;
 esac
 
-odyn_tag="odyn-dev:latest"
-
 enclaver_dir="$(dirname $(dirname ${BASH_SOURCE[0]}))/enclaver"
+
+odyn_tag="odyn-dev:latest"
+wrapper_base_tag="enclaver-wrapper-base-dev:latest"
 
 # Set build mode-specific variables
 if [ "$BUILD_MODE" = "release" ]; then
     rust_target_dir="./target/${rust_target}/release"
     CROSS_BUILD_FLAGS="--release"
+    odyn_tag="odyn:latest"
+    wrapper_base_tag="enclaver-wrapper-base:latest"
     echo "Build mode: RELEASE (optimized)"
 else
     rust_target_dir="./target/${rust_target}/debug"
@@ -157,8 +160,6 @@ else
     echo "Build mode: DEBUG (unoptimized, faster compile)"
 fi
 
-odyn_tag="odyn-dev:latest"
-wrapper_base_tag="enclaver-wrapper-base:latest"
 
 cd $enclaver_dir
 
