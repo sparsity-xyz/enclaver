@@ -256,3 +256,4 @@ jobs:
           files: |
             ${{ matrix.release_name }}-${{ github.ref_name }}.tar.gz
             ${{ matrix.release_name }}-${{ github.ref_name }}.tar.gz.sha256
+

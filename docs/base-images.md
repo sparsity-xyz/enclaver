@@ -9,16 +9,16 @@ Overview
 Enclaver uses three primary base images in its build and runtime flow. The repository references these images as defaults when a manifest doesn't override them. The images are published under the public ECR hostname used in this project.
 
 - Nitro CLI image: `public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest`
-- ODYN image (supervisor): `public.ecr.aws/s2t1d4c6/enclaver-io/odyn:latest`
-- Sleeve / wrapper base image: `public.ecr.aws/s2t1d4c6/enclaver-io/enclaver-wrapper-base:latest`
+-- ODYN image (supervisor): `public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest`
+-- Sleeve / wrapper base image: `public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base:latest`
 
 Where these are referenced in the repository
 -----------------------------------------
 - `enclaver/src/build.rs` contains the defaults used by `EnclaveArtifactBuilder`:
 
   const NITRO_CLI_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest";
-  const ODYN_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/odyn:latest";
-  const SLEEVE_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/enclaver-wrapper-base:latest";
+  const ODYN_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest";
+  const SLEEVE_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base:latest";
 
 - The multi-stage Dockerfile `dockerfiles/runtimebase.dockerfile` uses the `nitro-cli` image as a build source and copies runtime libraries and `/usr/bin/nitro-cli` from it into the runtime image.
 
@@ -61,9 +61,9 @@ Use these commands to pull and inspect the published images locally. Replace `<i
 1) Pull the image
 
 ```bash
-docker pull public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest
-docker pull public.ecr.aws/s2t1d4c6/enclaver-io/odyn:latest
-docker pull public.ecr.aws/s2t1d4c6/enclaver-io/enclaver-wrapper-base:latest
+docker pull public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest || true
+docker pull public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest || true
+docker pull public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base:latest || true
 ```
 
 2) Inspect image metadata and config
@@ -102,7 +102,7 @@ docker run --rm --entrypoint ls my-release:latest -la /enclave
 7) Use `dive` to examine layers interactively (recommended)
 
 ```bash
-dive public.ecr.aws/s2t1d4c6/enclaver-io/enclaver-wrapper-base:latest
+dive public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base:latest
 ```
 
 Inspecting the EIF conversion step
@@ -124,8 +124,8 @@ If you want a quick helper, here is a small one-liner you can save as `scripts/i
 set -euo pipefail
 images=(
   public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest
-  public.ecr.aws/s2t1d4c6/enclaver-io/odyn:latest
-  public.ecr.aws/s2t1d4c6/enclaver-io/enclaver-wrapper-base:latest
+  public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest
+  public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base:latest
 )
 
 for img in "${images[@]}"; do

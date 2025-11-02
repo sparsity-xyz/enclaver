@@ -23,9 +23,9 @@ const ENCLAVE_OVERLAY_CHOWN: &str = "0:0";
 const RELEASE_OVERLAY_CHOWN: &str = "0:0";
 
 const NITRO_CLI_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest";
-const ODYN_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/odyn:latest";
+const ODYN_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest";
 const ODYN_IMAGE_BINARY_PATH: &str = "/usr/local/bin/odyn";
-const SLEEVE_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/enclaver-wrapper-base:latest";
+const SLEEVE_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base:latest";
 
 pub struct EnclaveArtifactBuilder {
     docker: Arc<Docker>,
