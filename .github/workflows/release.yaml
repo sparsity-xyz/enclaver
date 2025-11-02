@@ -52,11 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          default: true
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
