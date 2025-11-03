@@ -72,6 +72,10 @@ aes = "0.8"
 sha2 = "0.10"
 ignore-result = "0.2.0"
 console-subscriber = { version = "0.1.10", optional = true }
+k256 = { version = "0.13.4", features = ["ecdsa"] }
+sha3 = "0.10"
+rand_core = "0.9.3"
+hex = "0.4"
 
 [dev-dependencies]
 assert2 = "0.3"
