@@ -64,6 +64,7 @@ impl EthKey {
         hash
     }
 
+    #[allow(dead_code)]
     fn sign_message(&self, message: &[u8]) -> String {
         let digest = Keccak256::new_with_prefix(message);
         let (sig, recid) = self.signing_key.sign_digest_recoverable(digest.clone()).unwrap();
@@ -85,7 +86,7 @@ impl EthKey {
             VerifyingKey::recover_from_digest(digest.clone(), &sig, recid).unwrap();
         let pub_bytes = verifying_key.to_encoded_point(false);
         let hash = Self::keccak256(&pub_bytes.as_bytes()[1..]);
-        format!("0x{}", hex::encode(&hash[12..])) == address.to_string()
+        format!("0x{}", hex::encode(&hash[12..])) == address
     }
 }
 
