@@ -1,4 +1,3 @@
-// src/lib.rs
 use k256::ecdsa::{SigningKey, VerifyingKey, Signature, RecoveryId};
 use rand::rngs::OsRng;
 use sha3::{Digest, Keccak256};
