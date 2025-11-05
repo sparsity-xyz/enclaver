@@ -16,17 +16,18 @@ set -eu
 #   - Docker running on $APPNODE
 #
 # Usage:
-#   APPNODE=user@host ./scripts/deploy-images-to-node.sh [--release|--debug] [--help]
+#   APPNODE_KEY=~/.ssh/key.pem APPNODE=user@host ./scripts/deploy-images-to-node.sh [--release|--debug] [--help]
 #
 # Environment variables:
 #   APPNODE        Required: SSH target in format user@host or host (defaults to $USER@host)
+#   APPNODE_KEY    Required: Path to SSH private key file
 #   BUILD_MODE     Set to 'release' or 'debug' (flag overrides this)
 # ---------------------------------------------------------------------------
 
 BUILD_MODE="${BUILD_MODE:-debug}"
 
 show_help() {
-    echo "Usage: APPNODE=user@host $0 [--release|--debug] [--help]"
+    echo "Usage: APPNODE_KEY=~/.ssh/key.pem APPNODE=user@host $0 [--release|--debug] [--help]"
     echo ""
     echo "Pack and deploy existing Docker images to a remote node for development."
     echo "Note: Images must be built first using build-docker-images.sh"
@@ -38,12 +39,13 @@ show_help() {
     echo ""
     echo "Environment variables:"
     echo "  APPNODE      Required: SSH target (e.g., ec2-user@54.177.250.78)"
+    echo "  APPNODE_KEY  Required: Path to SSH private key file (e.g., ~/.ssh/ank.pem)"
     echo "  BUILD_MODE   Set to 'release' or 'debug' (command-line flag overrides)"
     echo ""
     echo "Examples:"
-    echo "  APPNODE=ec2-user@54.177.250.78 $0                # Deploy debug images"
-    echo "  APPNODE=ec2-user@54.177.250.78 $0 --release      # Deploy release images"
-    echo "  BUILD_MODE=release APPNODE=user@host $0           # Deploy via env var"
+    echo "  APPNODE_KEY=~/.ssh/ank.pem APPNODE=ec2-user@54.177.250.78 $0                # Deploy debug images"
+    echo "  APPNODE_KEY=~/.ssh/ank.pem APPNODE=ec2-user@54.177.250.78 $0 --release      # Deploy release images"
+    echo "  BUILD_MODE=release APPNODE_KEY=~/.ssh/key.pem APPNODE=user@host $0           # Deploy via env var"
     exit 0
 }
 
@@ -72,6 +74,19 @@ done
 if [ -z "${APPNODE:-}" ]; then
     echo "Error: APPNODE environment variable is required"
     echo "Example: APPNODE=ec2-user@54.177.250.78 $0"
+    exit 1
+fi
+
+# Check if APPNODE_KEY is set
+if [ -z "${APPNODE_KEY:-}" ]; then
+    echo "Error: APPNODE_KEY environment variable is required"
+    echo "Example: APPNODE_KEY=~/.ssh/ank.pem APPNODE=ec2-user@54.177.250.78 $0"
+    exit 1
+fi
+
+# Verify the key file exists
+if [ ! -f "$APPNODE_KEY" ]; then
+    echo "Error: SSH key file not found: $APPNODE_KEY"
     exit 1
 fi
 
