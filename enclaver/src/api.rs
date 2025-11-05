@@ -103,7 +103,7 @@ impl ApiHandler {
             let att_doc = self.attester.attestation(AttestationParams {
                 nonce: Some(msg_hash.clone()),
                 public_key: Some(self.eth_key.public_key_as_der()?),
-                user_data: Some(self.eth_key.address().into_bytes()),
+                user_data: Some(self.eth_key.address_bytes()),
             })?;
 
             Some(base64::encode(att_doc))
@@ -153,8 +153,9 @@ impl AttestationRequest {
         let user_data = match self.user_data {
             Some(b64) => Some(base64::decode(b64)?),
             None => {
-                // Store ETH address as plain string
-                Some(eth_key.address().into_bytes())
+                // Store ETH address as raw 20 bytes (not string)
+                // This matches tee-tls format where get_address_bytes() returns 20 bytes
+                Some(eth_key.address_bytes())
             }
         };
 

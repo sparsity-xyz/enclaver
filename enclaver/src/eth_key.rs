@@ -54,6 +54,13 @@ impl EthKey {
         format!("0x{}", hex::encode(&hash[12..]))
     }
 
+    /// Ethereum address as raw 20 bytes (for attestation user_data)
+    pub fn address_bytes(&self) -> Vec<u8> {
+        let pub_bytes = self.verify_key.to_encoded_point(false);
+        let hash = Self::keccak256(&pub_bytes.as_bytes()[1..]);
+        hash[12..].to_vec()
+    }
+
     /// Raw SEC1-encoded uncompressed public key (65 bytes: 0x04 + 64 bytes)
     pub fn public_key_bytes(&self) -> Vec<u8> {
         self.verify_key.to_encoded_point(false).as_bytes().to_vec()

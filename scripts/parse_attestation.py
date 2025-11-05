@@ -271,14 +271,18 @@ def parse_attestation_doc(cbor_data: bytes) -> Dict[str, Any]:
                 else:
                     parsed_user_data["cabundle"] = value.hex() if isinstance(value, bytes) else value
             elif key_str == "user_data":
-                # user_data field - decode as UTF-8 string (plain ETH address)
+                # user_data field - if 20 bytes, it's raw ETH address bytes, convert to hex string
                 if isinstance(value, bytes):
-                    try:
-                        # Decode as UTF-8 string
-                        parsed_user_data["user_data"] = value.decode('utf-8')
-                    except UnicodeDecodeError:
-                        # If not UTF-8, return hex representation
-                        parsed_user_data["user_data"] = value.hex()
+                    if len(value) == 20:
+                        # Raw 20-byte Ethereum address - convert to hex string with 0x prefix
+                        parsed_user_data["user_data"] = "0x" + value.hex()
+                    else:
+                        # Try to decode as UTF-8 string (for backward compatibility)
+                        try:
+                            parsed_user_data["user_data"] = value.decode('utf-8')
+                        except UnicodeDecodeError:
+                            # If not UTF-8, return hex representation
+                            parsed_user_data["user_data"] = value.hex()
                 else:
                     parsed_user_data["user_data"] = value
             else:
@@ -289,12 +293,16 @@ def parse_attestation_doc(cbor_data: bytes) -> Dict[str, Any]:
         
         parsed["user_data"] = parsed_user_data
     elif isinstance(user_data_raw, bytes):
-        # Decode user_data bytes as UTF-8 string (plain ETH address)
-        try:
-            parsed["user_data"] = user_data_raw.decode('utf-8')
-        except UnicodeDecodeError:
-            # If not UTF-8, return hex representation
-            parsed["user_data"] = user_data_raw.hex()
+        # If 20 bytes, it's raw ETH address bytes, convert to hex string
+        if len(user_data_raw) == 20:
+            parsed["user_data"] = "0x" + user_data_raw.hex()
+        else:
+            # Try to decode as UTF-8 string (for backward compatibility)
+            try:
+                parsed["user_data"] = user_data_raw.decode('utf-8')
+            except UnicodeDecodeError:
+                # If not UTF-8, return hex representation
+                parsed["user_data"] = user_data_raw.hex()
     else:
         parsed["user_data"] = user_data_raw
     
