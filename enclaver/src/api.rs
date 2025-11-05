@@ -7,7 +7,6 @@ use hyper::{Method, Request, Response, StatusCode};
 use pkcs8::{DecodePublicKey, SubjectPublicKeyInfo};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::eth_key::EthKey;
 use crate::http_util::{self, HttpHandler};
@@ -101,16 +100,10 @@ impl ApiHandler {
         let signature = self.eth_key.sign_message(&msg_hash);
 
         let attestation = if req.include_attestation {
-            let user_data = json::object! {
-                eth_address: self.eth_key.address(),
-                message_hash: format!("0x{}", hex::encode(&msg_hash)),
-                timestamp: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-            };
-
             let att_doc = self.attester.attestation(AttestationParams {
                 nonce: Some(msg_hash.clone()),
                 public_key: Some(self.eth_key.public_key_as_der()?),
-                user_data: Some(json::stringify(user_data).into_bytes()),
+                user_data: Some(self.eth_key.address().into_bytes()),
             })?;
 
             Some(base64::encode(att_doc))
@@ -160,11 +153,8 @@ impl AttestationRequest {
         let user_data = match self.user_data {
             Some(b64) => Some(base64::decode(b64)?),
             None => {
-                let data = json::object! {
-                    eth_address: eth_key.address(),
-                    version: "1.0",
-                };
-                Some(json::stringify(data).into_bytes())
+                // Store ETH address as plain string
+                Some(eth_key.address().into_bytes())
             }
         };
 

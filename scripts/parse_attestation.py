@@ -270,6 +270,17 @@ def parse_attestation_doc(cbor_data: bytes) -> Dict[str, Any]:
                             parsed_user_data["cabundle"].append(cert.hex() if isinstance(cert, bytes) else cert)
                 else:
                     parsed_user_data["cabundle"] = value.hex() if isinstance(value, bytes) else value
+            elif key_str == "user_data":
+                # user_data field - decode as UTF-8 string (plain ETH address)
+                if isinstance(value, bytes):
+                    try:
+                        # Decode as UTF-8 string
+                        parsed_user_data["user_data"] = value.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # If not UTF-8, return hex representation
+                        parsed_user_data["user_data"] = value.hex()
+                else:
+                    parsed_user_data["user_data"] = value
             else:
                 if isinstance(value, bytes):
                     parsed_user_data[key_str] = value.hex()
@@ -278,7 +289,12 @@ def parse_attestation_doc(cbor_data: bytes) -> Dict[str, Any]:
         
         parsed["user_data"] = parsed_user_data
     elif isinstance(user_data_raw, bytes):
-        parsed["user_data"] = {"raw": user_data_raw.hex()}
+        # Decode user_data bytes as UTF-8 string (plain ETH address)
+        try:
+            parsed["user_data"] = user_data_raw.decode('utf-8')
+        except UnicodeDecodeError:
+            # If not UTF-8, return hex representation
+            parsed["user_data"] = user_data_raw.hex()
     else:
         parsed["user_data"] = user_data_raw
     
@@ -421,7 +437,23 @@ Examples:
         print(f"Saved raw attestation to: {output_path}", file=sys.stderr)
         
         parsed = parse_attestation_doc(cbor_data)
-        print(json.dumps(parsed, indent=2, default=str))
+        
+        # Ensure any remaining bytes are converted to strings for JSON output
+        def convert_bytes_to_str(obj):
+            if isinstance(obj, bytes):
+                try:
+                    return obj.decode('utf-8')
+                except UnicodeDecodeError:
+                    return obj.hex()
+            elif isinstance(obj, dict):
+                return {k: convert_bytes_to_str(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_bytes_to_str(item) for item in obj]
+            else:
+                return obj
+        
+        parsed = convert_bytes_to_str(parsed)
+        print(json.dumps(parsed, indent=2))
     else:
         if args.file:
             print("Error: --no-parse requires a URL, not a file", file=sys.stderr)
