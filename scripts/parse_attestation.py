@@ -236,7 +236,7 @@ def parse_attestation_doc(cbor_data: bytes) -> Dict[str, Any]:
                 if isinstance(value, dict):
                     parsed_user_data["pcrs"] = {
                         str(k): {
-                            "value": parse_pcr(v) if isinstance(v, bytes) else v.hex() if isinstance(v, bytes) else str(v),
+                            "value": parse_pcr(v) if isinstance(v, bytes) else str(v),
                             "pcr_index": int(k) if isinstance(k, (int, str)) and str(k).isdigit() else k
                         }
                         for k, v in value.items()
