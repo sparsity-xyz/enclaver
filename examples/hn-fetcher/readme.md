@@ -115,7 +115,7 @@ REPOSITORY           TAG       IMAGE ID       CREATED         SIZE
 hn-fetcher-enclave   latest    99259a94f49d   2 minutes ago   237MB
 ```
 
-## run enclaver image
+## Run enclaver image
 
 Run the enclave image with:
 ```bash
@@ -123,7 +123,7 @@ enclaver run --publish 8000:8000 hn-fetcher-enclave:latest
 curl http://localhost:8000
 ```
 
-## check aws nitro enclave info
+## Check aws nitro enclave info
 
 You can check the nitro enclave info with:
 ```bash
