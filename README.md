@@ -14,7 +14,7 @@ Run this command to install the latest version of the `enclaver` CLI tool:
 
 ## Quick start
 
-See examples/hn-fetcher/readme.md for a quick start example of building and running an enclave application with Enclaver.
+See [examples/hn-fetcher/readme.md](examples/hn-fetcher/readme.md) for a quick start example of building and running an enclave application with Enclaver.
 
 ## enclaver.yaml reference
 
