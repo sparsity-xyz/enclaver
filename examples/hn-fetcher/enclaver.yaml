@@ -1,8 +1,8 @@
 version: v1
-name: "example"
-target: "enclave:latest"
+name: "hn-fetcher"
+target: "hn-fetcher-enclave:latest"
 sources:
-  app: "app:latest"
+  app: "hn-fetcher:latest"
   #odyn: "odyn-dev:latest"
   #sleeve: "enclaver-wrapper-base:latest"
 defaults:
