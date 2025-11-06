@@ -3,13 +3,11 @@ use async_trait::async_trait;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::header::CONTENT_TYPE;
-use hyper::uri::Uri;
-use hyper::{Method, Request, Response, StatusCode};
+use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use serde_json::Value;
-use std::sync::Arc;
 
 use crate::http_util::{self, HttpHandler};
 
@@ -67,12 +65,15 @@ impl AuxApiHandler {
 
                 Ok(response_builder.body(Full::new(body_bytes))?)
             }
-            Err(_) => Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header(CONTENT_TYPE, "application/json")
-                .body(Full::new(Bytes::from(
-                    r#"{"error":"Internal API service unavailable"}"#,
-                ))?),
+            Err(_) => {
+                let response = Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(
+                        r#"{"error":"Internal API service unavailable"}"#,
+                    )))?;
+                Ok(response)
+            }
         }
     }
 
