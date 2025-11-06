@@ -2,7 +2,7 @@
 
 Enclaver is an open source toolkit created to enable easy adoption of software enclaves, for new and existing backend software.
 
-This is a Sparsity edition of Enclaver. See [here](https://github.com/enclaver-io/enclaver) for original project details.
+This is a Sparsity edition of Enclaver. See [here](https://github.com/enclaver-io/enclaver) for original project.
 
 ## Installation
 
@@ -12,18 +12,15 @@ Run this command to install the latest version of the `enclaver` CLI tool:
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sparsity-xyz/enclaver/refs/heads/sparsity/install.sh)"
 ```
 
-## Architecture
+## Quick start
 
-Read the [architecture doc](https://enclaver.io/docs/0.x/architecture/) for the full details. Enclaver consists of 3 interrelated pieces of software: 
+See examples/hn-fetcher/readme.md for a quick start example of building and running an enclave application with Enclaver.
 
- - `enclaver` CLI for build and run
- - “Outer Proxy” + Enclave Supervisor
- - “Inner Proxy” + Process Supervisor
+## enclaver.yaml reference
 
-<img src="docs/img/diagram-enclaver-components.svg" width="800" />
+The `enclaver.yaml` manifest file configures how to build and run your enclave application. See [enclaver.yaml](docs/enclaver.yaml) for the full reference of all fields.
 
-
-## Container and EIF layout (ASCII diagram)
+## Container and EIF layout
 
 The diagram below shows how the release Docker image runs as a single container, what layers it contains, and how the EIF (enclave) is structured inside with odyn and its modules.
 
@@ -69,3 +66,14 @@ Data paths overview:
   odyn.kms-proxy <--> External KMS (network)
   App stdout/stderr --> odyn.console --> Docker container logs
 ```
+
+## Architecture
+
+Read the [architecture doc](https://enclaver.io/docs/0.x/architecture/) for the full details. Enclaver consists of 3 interrelated pieces of software: 
+
+ - `enclaver` CLI for build and run
+ - “Outer Proxy” + Enclave Supervisor
+ - “Inner Proxy” + Process Supervisor
+
+<img src="docs/img/diagram-enclaver-components.svg" width="800" />
+
