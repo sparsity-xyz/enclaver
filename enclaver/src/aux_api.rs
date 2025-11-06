@@ -46,7 +46,7 @@ impl AuxApiHandler {
             req_builder = req_builder.header(CONTENT_TYPE, "application/json");
         }
 
-        let body_bytes = body.unwrap_or_else(Bytes::new);
+        let body_bytes = body.unwrap_or_default();
         let req = req_builder.body(Full::new(body_bytes))?;
 
         match self.client.request(req).await {
