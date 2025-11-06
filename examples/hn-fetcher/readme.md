@@ -4,7 +4,7 @@ This is a minimal example app that forwards an HTTP GET to an upstream host (new
 
 ## Build app image and run
 
-Buid the app image with:
+Build the app image with:
 
 ```bash
 docker build -t hn-fetcher .
