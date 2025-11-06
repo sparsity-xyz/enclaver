@@ -113,6 +113,18 @@ impl Configuration {
     pub fn api_port(&self) -> Option<u16> {
         self.manifest.api.as_ref().map(|a| a.listen_port)
     }
+
+    pub fn aux_api_port(&self) -> Option<u16> {
+        // Aux API only runs when API service is enabled
+        let api_port = self.api_port()?;
+
+        // If aux_api.listen_port is specified, use it; otherwise default to api_port + 1
+        self.manifest
+            .aux_api
+            .as_ref()
+            .and_then(|a| a.listen_port)
+            .or(Some(api_port + 1))
+    }
 }
 
 impl KmsEndpointProvider for Configuration {
