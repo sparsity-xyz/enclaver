@@ -1,0 +1,5 @@
+# Python dependencies for parse_attestation.py
+cbor2>=5.4.0
+requests>=2.31.0
+cryptography>=41.0.0
+
