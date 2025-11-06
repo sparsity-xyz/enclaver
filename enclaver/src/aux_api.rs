@@ -86,11 +86,10 @@ impl AuxApiHandler {
         // Parse JSON body and extract only the nonce field
         let sanitized_body = match serde_json::from_slice::<Value>(&body) {
             Ok(mut json_value) => {
-                // Remove public_key and user_data if present, keep only nonce
+                // Remove public_key and user_data to prevent external callers from overriding defaults; retain all other fields (including nonce)
                 if let Some(obj) = json_value.as_object_mut() {
                     obj.remove("public_key");
                     obj.remove("user_data");
-                    // Keep only nonce if it exists
                 }
                 serde_json::to_vec(&json_value)?
             }
