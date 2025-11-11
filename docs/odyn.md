@@ -38,6 +38,9 @@ kms_proxy:
 api:
   listen_port: 8000
 
+aux_api:
+  listen_port: 8001  # Optional: defaults to api_port + 1 if not specified
+
 sources:
   odyn: "public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest"
   sleeve: "public.ecr.aws/d4t4u8d2/sparsity-ai/enclaver-wrapper-base:latest"
@@ -170,7 +173,44 @@ The `enclaver/src/bin/odyn` binary is organized into the following modules. Each
 
 ---
 
-### 4.4 `console.rs`
+### 4.4 `aux_api.rs`
+
+- Responsibilities
+  - Start an auxiliary HTTP API that proxies specific endpoints to the internal API service.
+  - Provide controlled external access to attestation and Ethereum address endpoints.
+  - Sanitize incoming requests to prevent external callers from overriding internal defaults.
+
+- Key data structures
+  - `AuxApiService { task: Option<JoinHandle<()>> }` — service wrapper managing the aux API server task.
+  - `AuxApiHandler` (from `enclaver::aux_api`) — implements the proxy logic and request sanitization.
+
+- External deps
+  - `enclaver::aux_api::AuxApiHandler` for HTTP handling and proxying.
+  - `enclaver::http_util::HttpServer` for server infrastructure.
+  - hyper, http-body-util for HTTP client and proxying.
+
+- Lifecycle / behaviors
+  - `start()` checks if both `aux_api` and `api` sections are configured in the manifest. If `aux_api.listen_port` is specified, uses that port; otherwise defaults to `api_port + 1`.
+  - Binds the aux API listen port and spawns a server task that handles incoming requests.
+  - Routes supported:
+    - `GET /v1/eth/address` — proxies to internal API to retrieve the enclave's Ethereum address.
+    - `POST /v1/attestation` — proxies to internal API with sanitized request body (removes `public_key` and `user_data` fields to prevent external override of defaults).
+  - `stop()` aborts the server task and awaits completion.
+
+- Common errors
+  - Bind failures if the port is already in use.
+  - Internal API unavailable (returns 503 Service Unavailable with error JSON).
+  - Invalid JSON in attestation requests (returns 400 Bad Request).
+
+- Extensions
+  - Add authentication/authorization middleware.
+  - Implement rate limiting per client.
+  - Add additional proxy endpoints as needed.
+  - Request/response logging and metrics.
+
+---
+
+### 4.5 `console.rs`
 
 - Responsibilities
   - Capture the entrypoint's stdout/stderr into an in-memory ring buffer (ByteLog) and serve that buffer over VSOCK.
@@ -194,7 +234,7 @@ The `enclaver/src/bin/odyn` binary is organized into the following modules. Each
 
 ---
 
-### 4.5 `ingress.rs`
+### 4.6 `ingress.rs`
 
 - Responsibilities
   - Bind TCP or TLS listeners configured in the manifest and spawn `EnclaveProxy` workers to accept and proxy inbound connections.
@@ -216,7 +256,7 @@ The `enclaver/src/bin/odyn` binary is organized into the following modules. Each
 
 ---
 
-### 4.6 `egress.rs`
+### 4.7 `egress.rs`
 
 - Responsibilities
   - Provide a local HTTP egress proxy (if enabled) enforcing an allow list and optionally mapping endpoints to other upstreams.
@@ -239,7 +279,7 @@ The `enclaver/src/bin/odyn` binary is organized into the following modules. Each
 
 ---
 
-### 4.7 `kms_proxy.rs`
+### 4.8 `kms_proxy.rs`
 
 - Responsibilities
   - Run a local KMS-compatible proxy that receives SDK KMS requests and forwards them to AWS KMS using IMDS-derived credentials (retrieved through the egress path).
@@ -262,7 +302,7 @@ The `enclaver/src/bin/odyn` binary is organized into the following modules. Each
 
 ---
 
-### 4.8 `launcher.rs`
+### 4.9 `launcher.rs`
 
 - Responsibilities
   - Launch the configured entrypoint process with the required uid/gid and supervise its lifetime.
@@ -286,7 +326,7 @@ The `enclaver/src/bin/odyn` binary is organized into the following modules. Each
 
 ---
 
-### 4.9 `enclave.rs`
+### 4.10 `enclave.rs`
 
 - Responsibilities
   - Low-level bootstrap: bring up the loopback (`lo`) interface and seed the kernel RNG from the Nitro Secure Module (NSM).
@@ -315,10 +355,11 @@ The `enclaver/src/bin/odyn` binary is organized into the following modules. Each
 3. Start `EgressService` (if enabled) — sets global proxy env vars.
 4. Start `KmsProxyService` (if configured) — requires egress and IMDS.
 5. Start `ApiService` (if configured).
-6. Start `AppStatus` / `AppLog` (make vsock listeners available early).
-7. Start `IngressService` (bind listeners and spawn proxies).
-8. Launch entrypoint with `launcher::start_child()` and monitor sentinel.
-9. On entrypoint exit, update status, stop services in reverse order, and exit with sentinel's `ExitStatus`.
+6. Start `AuxApiService` (if configured) — requires API service to be running.
+7. Start `AppStatus` / `AppLog` (make vsock listeners available early).
+8. Start `IngressService` (bind listeners and spawn proxies).
+9. Launch entrypoint with `launcher::start_child()` and monitor sentinel.
+10. On entrypoint exit, update status, stop services in reverse order, and exit with sentinel's `ExitStatus`.
 
 ---
 
@@ -357,14 +398,15 @@ sequenceDiagram
     Odyn->>Odyn: enclave::bootstrap (lo up, seed RNG)
   end
   Odyn->>Odyn: start EgressService (if configured)
-  Odyn->>Odyn: start IngressService (bind listeners)
   Odyn->>Odyn: start KmsProxyService (if configured)
   Odyn->>Odyn: start ApiService (if configured)
+  Odyn->>Odyn: start AuxApiService (if configured)
   Odyn->>Host: open APP_LOG_PORT / STATUS_PORT (vsock)
+  Odyn->>Odyn: start IngressService (bind listeners)
   Odyn->>Entrypoint: launcher::start_child(entrypoint)
   Entrypoint-->>Odyn: stdout/stderr (captured into ByteLog)
   Odyn->>Host: stream logs & status via vsock
-  note right of Odyn: services run (egress, kms_proxy, ingress, api)
+  note right of Odyn: services run (egress, kms_proxy, api, aux_api, ingress)
   Entrypoint-->>Odyn: exit (code)
   Odyn->>Odyn: update AppStatus (exited)
   Odyn->>Odyn: stop services (reverse order)
@@ -384,3 +426,5 @@ sequenceDiagram
 - `enclaver/src/bin/odyn/launcher.rs` — spawn/reap entrypoint.
 - `enclaver/src/bin/odyn/enclave.rs` — bootstrap helpers (loopback, RNG seed).
 - `enclaver/src/bin/odyn/api.rs` — internal API server.
+- `enclaver/src/bin/odyn/aux_api.rs` — auxiliary API service (proxies to internal API).
+- `enclaver/src/aux_api.rs` — aux API handler implementation (routes and sanitization logic).

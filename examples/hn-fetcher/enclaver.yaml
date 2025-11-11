@@ -12,3 +12,7 @@ ingress:
 egress:
   allow:
     - news.ycombinator.com
+api:
+  listen_port: 9000
+aux_api:
+  listen_port: 9001
