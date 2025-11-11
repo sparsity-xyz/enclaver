@@ -27,6 +27,9 @@ pub mod nsm;
 #[cfg(feature = "odyn")]
 pub mod api;
 
+#[cfg(feature = "odyn")]
+pub mod aux_api;
+
 #[cfg(feature = "proxy")]
 pub mod proxy;
 
