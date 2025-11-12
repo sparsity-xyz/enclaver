@@ -145,6 +145,16 @@ impl HostHttpProxy {
         })
     }
 
+    pub fn bind_auto(preferred_port: u32, max_attempts: u32) -> anyhow::Result<(Self, u32)> {
+        let (stream, actual_port) = crate::vsock::serve_auto(preferred_port, max_attempts)?;
+        Ok((
+            Self {
+                incoming: Box::new(stream),
+            },
+            actual_port,
+        ))
+    }
+
     pub async fn serve(self) {
         let mut incoming = Box::into_pin(self.incoming);
 
