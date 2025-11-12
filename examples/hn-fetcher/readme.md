@@ -49,7 +49,17 @@ ingress:
 egress:
   allow:
     - news.ycombinator.com
+api:
+  listen_port: 9000
+aux_api:
+  listen_port: 9001
 ```
+
+The manifest includes:
+- `ingress` - Allows external HTTP traffic on port 8000
+- `egress` - Allows outbound requests to news.ycombinator.com
+- `api` - Enables the internal API service on port 9000 (provides attestation and key management)
+- `aux_api` - Enables the auxiliary API on port 9001 (provides controlled external access to select API endpoints)
 
 Then build enclaver image with command:
 
@@ -119,9 +129,60 @@ hn-fetcher-enclave   latest    99259a94f49d   2 minutes ago   237MB
 
 Run the enclave image with:
 ```bash
-enclaver run --publish 8000:8000 hn-fetcher-enclave:latest
+enclaver run --publish 8000:8000 --publish 9001:9001 hn-fetcher-enclave:latest
+```
+
+Test the application:
+```bash
 curl http://localhost:8000
 ```
+
+## Using the Auxiliary API
+
+The auxiliary API provides controlled external access to enclave functionality. It proxies requests to the internal API while sanitizing inputs to prevent external callers from overriding security-critical defaults.
+
+### Available Endpoints
+
+#### Get Ethereum Address
+
+Retrieve the enclave's Ethereum address derived from the enclave's keypair:
+
+```bash
+curl http://localhost:9001/v1/eth/address
+```
+
+Example response:
+```json
+{
+  "address": "0x1234567890abcdef1234567890abcdef12345678"
+}
+```
+
+#### Request Attestation
+
+Request an attestation document from the enclave. You can optionally provide a nonce for freshness:
+
+```bash
+# Request attestation with default parameters
+curl -X POST http://localhost:9001/v1/attestation \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Request attestation with a custom nonce
+curl -X POST http://localhost:9001/v1/attestation \
+  -H "Content-Type: application/json" \
+  -d '{"nonce": "your-base64-encoded-nonce-here"}'
+```
+
+Example response:
+```json
+{
+  "attestation_document": "base64-encoded-attestation-document",
+  "public_key": "base64-encoded-public-key"
+}
+```
+
+**Security Note:** The aux API automatically sanitizes incoming requests by removing `public_key` and `user_data` fields to prevent external callers from overriding the enclave's internal defaults. This ensures that the attestation document always contains the enclave's authentic keypair and metadata.
 
 ## Check aws nitro enclave info
 
