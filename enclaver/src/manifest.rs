@@ -24,6 +24,7 @@ pub struct Manifest {
     pub kms_proxy: Option<KmsProxy>,
     pub api: Option<Api>,
     pub aux_api: Option<AuxApi>,
+    pub vsock_ports: Option<VsockPorts>,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -87,6 +88,14 @@ pub struct Api {
 #[serde(deny_unknown_fields)]
 pub struct AuxApi {
     pub listen_port: Option<u16>,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VsockPorts {
+    pub status_port: Option<u32>,
+    pub app_log_port: Option<u32>,
+    pub http_egress_port: Option<u32>,
 }
 
 fn parse_manifest(buf: &[u8]) -> Result<Manifest> {

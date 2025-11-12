@@ -43,6 +43,9 @@ pub struct Enclave {
     debug_mode: bool,
     enclave_info: Option<EnclaveInfo>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    status_port: u32,
+    app_log_port: u32,
+    http_egress_vsock_port: u32,
 }
 
 impl Enclave {
@@ -100,6 +103,24 @@ impl Enclave {
             }
         };
 
+        let status_port = manifest
+            .vsock_ports
+            .as_ref()
+            .and_then(|vp| vp.status_port)
+            .unwrap_or(STATUS_PORT);
+        let app_log_port = manifest
+            .vsock_ports
+            .as_ref()
+            .and_then(|vp| vp.app_log_port)
+            .unwrap_or(APP_LOG_PORT);
+        let http_egress_vsock_port = manifest
+            .vsock_ports
+            .as_ref()
+            .and_then(|vp| vp.http_egress_port)
+            .unwrap_or(HTTP_EGRESS_VSOCK_PORT);
+
+        debug!("using vsock ports: status={status_port}, app_log={app_log_port}, http_egress={http_egress_vsock_port}");
+
         Ok(Self {
             cli: NitroCLI::new(),
             eif_path: eif_path.to_path_buf(),
@@ -109,6 +130,9 @@ impl Enclave {
             debug_mode: opts.debug_mode,
             enclave_info: None,
             tasks: Vec::new(),
+            status_port,
+            app_log_port,
+            http_egress_vsock_port,
         })
     }
 
@@ -152,7 +176,7 @@ impl Enclave {
         self.start_ingress_proxies(enclave_info.cid).await?;
 
         let exit_res = tokio::select! {
-            exit_res = Enclave::await_exit(enclave_info.cid) =>
+            exit_res = Enclave::await_exit(enclave_info.cid, self.status_port) =>
                 exit_res,
 
             _ = cancellation.cancelled() =>
@@ -207,8 +231,10 @@ impl Enclave {
             return Ok(());
         }
 
-        info!("starting egress proxy on vsock port {HTTP_EGRESS_VSOCK_PORT}");
-        let proxy = HostHttpProxy::bind(HTTP_EGRESS_VSOCK_PORT)?;
+        let preferred_port = self.http_egress_vsock_port;
+        let (proxy, actual_port) = HostHttpProxy::bind_auto(preferred_port, 10)?;
+        self.http_egress_vsock_port = actual_port;
+        info!("egress proxy bound to vsock port {actual_port}");
         self.tasks.push(utils::spawn!("egress proxy", async move {
             proxy.serve().await;
         })?);
@@ -217,11 +243,12 @@ impl Enclave {
     }
 
     fn start_odyn_log_stream(&mut self, cid: u32) -> Result<()> {
+        let app_log_port = self.app_log_port;
         self.tasks
             .push(utils::spawn!("odyn log stream", async move {
                 info!("waiting for enclave to boot to stream logs");
                 let conn = loop {
-                    match VsockStream::connect(cid, APP_LOG_PORT).await {
+                    match VsockStream::connect(cid, app_log_port).await {
                         Ok(conn) => break conn,
 
                         // TODO: improve the polling frequency / backoff / timeout
@@ -240,11 +267,11 @@ impl Enclave {
         Ok(())
     }
 
-    async fn await_exit(cid: u32) -> Result<EnclaveExitStatus> {
+    async fn await_exit(cid: u32, status_port: u32) -> Result<EnclaveExitStatus> {
         let mut failed_attempts = 0;
 
         loop {
-            let conn = match VsockStream::connect(cid, STATUS_PORT).await {
+            let conn = match VsockStream::connect(cid, status_port).await {
                 Ok(conn) => conn,
 
                 Err(_) => {
