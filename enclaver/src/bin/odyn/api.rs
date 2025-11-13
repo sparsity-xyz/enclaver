@@ -19,7 +19,10 @@ impl ApiService {
             info!("Starting API on port {port}");
 
             let srv = HttpServer::bind(port).await?;
-            let handler = ApiHandler::new(Box::new(NsmAttestationProvider::new(nsm)))?;
+            let handler = ApiHandler::new(
+                Box::new(NsmAttestationProvider::new(nsm.clone())),
+                Some(nsm),
+            )?;
 
             Some(tokio::task::spawn(async move {
                 _ = srv.serve(handler).await;
