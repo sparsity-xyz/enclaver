@@ -54,7 +54,7 @@ impl ApiHandler {
                 _ => Ok(http_util::method_not_allowed()),
             },
             "/v1/random" => match head.method {
-                Method::GET => self.handle_rng().await,
+                Method::GET => self.handle_random().await,
                 _ => Ok(http_util::method_not_allowed()),
             },
             _ => Ok(http_util::not_found()),
@@ -136,7 +136,7 @@ impl ApiHandler {
             .body(Full::new(Bytes::from(serde_json::to_string(&response)?)))?)
     }
 
-    async fn handle_rng(&self) -> Result<Response<Full<Bytes>>> {
+    async fn handle_random(&self) -> Result<Response<Full<Bytes>>> {
         let random_bytes = if let Some(nsm) = &self.nsm {
             // Use hardware-backed NSM RNG in production
             let random = nsm.get_random()?;
@@ -417,7 +417,7 @@ async fn test_eth_sign_invalid_hash() {
 }
 
 #[tokio::test]
-async fn test_rng_handler() {
+async fn test_random_handler() {
     use crate::nsm::StaticAttestationProvider;
     use assert2::assert;
 
