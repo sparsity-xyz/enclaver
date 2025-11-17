@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::eth_key::EthKey;
+use crate::eth_tx::{self, AccessListEntry, TxSignature, UnsignedEip1559Tx};
 use crate::http_util::{self, HttpHandler};
 use crate::nsm::{AttestationParams, AttestationProvider, Nsm};
 
@@ -26,13 +27,52 @@ impl ApiHandler {
         attester: Box<dyn AttestationProvider + Send + Sync>,
         nsm: Option<Arc<Nsm>>,
     ) -> Result<Self> {
-        let eth_key = Arc::new(EthKey::new());
+        let eth_key = match nsm.as_ref() {
+            Some(nsm_ref) => match Self::collect_random_bytes(nsm_ref, 32).and_then(|bytes| {
+                let mut entropy = [0u8; 32];
+                entropy.copy_from_slice(&bytes);
+                EthKey::from_entropy(entropy)
+            }) {
+                Ok(key) => {
+                    log::info!("Seeded Ethereum key from NSM RNG");
+                    Arc::new(key)
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Failed to derive Ethereum key from NSM RNG, falling back to OsRng: {}",
+                        err
+                    );
+                    Arc::new(EthKey::new())
+                }
+            },
+            None => {
+                log::info!("NSM unavailable; generating Ethereum key from OsRng");
+                Arc::new(EthKey::new())
+            }
+        };
         log::info!("Enclave Ethereum address: {}", eth_key.address());
         Ok(Self {
             attester,
             eth_key,
             nsm,
         })
+    }
+
+    fn collect_random_bytes(nsm: &Arc<Nsm>, len: usize) -> Result<Vec<u8>> {
+        let mut buf = Vec::with_capacity(len);
+        while buf.len() < len {
+            let chunk = nsm.get_random()?;
+            if chunk.is_empty() {
+                continue;
+            }
+            let remaining = len - buf.len();
+            if chunk.len() >= remaining {
+                buf.extend_from_slice(&chunk[..remaining]);
+            } else {
+                buf.extend_from_slice(&chunk);
+            }
+        }
+        Ok(buf)
     }
 
     async fn handle_request(
@@ -51,6 +91,10 @@ impl ApiHandler {
             },
             "/v1/eth/sign" => match head.method {
                 Method::POST => self.handle_eth_sign(head, body).await,
+                _ => Ok(http_util::method_not_allowed()),
+            },
+            "/v1/eth/sign-tx" => match head.method {
+                Method::POST => self.handle_eth_sign_tx(head, body).await,
                 _ => Ok(http_util::method_not_allowed()),
             },
             "/v1/random" => match head.method {
@@ -136,21 +180,60 @@ impl ApiHandler {
             .body(Full::new(Bytes::from(serde_json::to_string(&response)?)))?)
     }
 
+    async fn handle_eth_sign_tx(
+        &self,
+        _head: &hyper::http::request::Parts,
+        body: Bytes,
+    ) -> Result<Response<Full<Bytes>>> {
+        let req: EthSignTxRequest = match serde_json::from_slice(&body) {
+            Ok(req) => req,
+            Err(err) => return Ok(http_util::bad_request(err.to_string())),
+        };
+
+        let unsigned_tx = match req.payload.into_unsigned_tx() {
+            Ok(tx) => tx,
+            Err(err) => return Ok(http_util::bad_request(err.to_string())),
+        };
+
+        let signable_payload = unsigned_tx.signing_payload();
+        let signature_bytes = self.eth_key.sign_message(&signable_payload);
+        let tx_signature = match TxSignature::from_recoverable_bytes(&signature_bytes) {
+            Ok(sig) => sig,
+            Err(err) => return Ok(http_util::bad_request(err.to_string())),
+        };
+
+        let raw_tx = unsigned_tx.finalize(&tx_signature);
+        let tx_hash = eth_tx::keccak256(&raw_tx);
+
+        let attestation = if req.include_attestation {
+            let att_doc = self.attester.attestation(AttestationParams {
+                nonce: Some(tx_hash.to_vec()),
+                public_key: Some(self.eth_key.public_key_as_der()?),
+                user_data: Some(self.eth_key.address_bytes()),
+            })?;
+            Some(base64::encode(att_doc))
+        } else {
+            None
+        };
+
+        let response = EthSignTxResponse {
+            raw_transaction: format!("0x{}", hex::encode(&raw_tx)),
+            transaction_hash: format!("0x{}", hex::encode(tx_hash)),
+            signature: format!("0x{}", hex::encode(signature_bytes)),
+            address: self.eth_key.address(),
+            attestation,
+        };
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(serde_json::to_string(&response)?)))?)
+    }
+
     async fn handle_rng(&self) -> Result<Response<Full<Bytes>>> {
         let random_bytes = if let Some(nsm) = &self.nsm {
             // Use hardware-backed NSM RNG in production
-            let random = nsm.get_random()?;
-            // NSM returns variable length, we need exactly 32 bytes
-            if random.len() >= 32 {
-                random[..32].to_vec()
-            } else {
-                // If NSM returns less than 32 bytes, pad with additional calls
-                let mut result = random;
-                while result.len() < 32 {
-                    result.extend_from_slice(&nsm.get_random()?);
-                }
-                result[..32].to_vec()
-            }
+            Self::collect_random_bytes(nsm, 32)?
         } else {
             // Fallback to OsRng for testing
             let mut rng = rand::rngs::OsRng;
@@ -226,6 +309,125 @@ struct EthSignResponse {
     attestation: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct EthSignTxRequest {
+    #[serde(default)]
+    include_attestation: bool,
+    payload: TxPayload,
+}
+
+#[derive(Serialize)]
+struct EthSignTxResponse {
+    raw_transaction: String,
+    transaction_hash: String,
+    signature: String,
+    address: String,
+    attestation: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum TxPayload {
+    Structured(StructuredTxPayload),
+    RawRlp(RawRlpPayload),
+}
+
+impl TxPayload {
+    fn into_unsigned_tx(self) -> Result<UnsignedEip1559Tx> {
+        match self {
+            TxPayload::Structured(inner) => inner.into_unsigned_tx(),
+            TxPayload::RawRlp(inner) => inner.into_unsigned_tx(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct StructuredTxPayload {
+    chain_id: String,
+    nonce: String,
+    max_priority_fee_per_gas: String,
+    max_fee_per_gas: String,
+    gas_limit: String,
+    to: Option<String>,
+    #[serde(default = "zero_hex_string")]
+    value: String,
+    #[serde(default = "empty_hex_string")]
+    data: String,
+    #[serde(default)]
+    access_list: Vec<AccessListInput>,
+}
+
+impl StructuredTxPayload {
+    fn into_unsigned_tx(self) -> Result<UnsignedEip1559Tx> {
+        let chain_id = eth_tx::parse_scalar_hex(&self.chain_id)?;
+        if chain_id.is_empty() {
+            return Err(anyhow!("chain_id cannot be zero"));
+        }
+        let to = match self.to {
+            Some(addr) => Some(eth_tx::parse_address_hex(&addr)?),
+            None => None,
+        };
+        let access_list = self
+            .access_list
+            .into_iter()
+            .map(|entry| entry.into_entry())
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(UnsignedEip1559Tx {
+            chain_id,
+            nonce: eth_tx::parse_scalar_hex(&self.nonce)?,
+            max_priority_fee_per_gas: eth_tx::parse_scalar_hex(&self.max_priority_fee_per_gas)?,
+            max_fee_per_gas: eth_tx::parse_scalar_hex(&self.max_fee_per_gas)?,
+            gas_limit: eth_tx::parse_scalar_hex(&self.gas_limit)?,
+            to,
+            value: eth_tx::parse_scalar_hex(&self.value)?,
+            data: eth_tx::parse_data_hex(&self.data)?,
+            access_list,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct RawRlpPayload {
+    raw_payload: String,
+}
+
+impl RawRlpPayload {
+    fn into_unsigned_tx(self) -> Result<UnsignedEip1559Tx> {
+        let bytes = eth_tx::parse_data_hex(&self.raw_payload)?;
+        UnsignedEip1559Tx::from_raw_payload(&bytes)
+    }
+}
+
+#[derive(Deserialize)]
+struct AccessListInput {
+    address: String,
+    #[serde(default)]
+    storage_keys: Vec<String>,
+}
+
+impl AccessListInput {
+    fn into_entry(self) -> Result<AccessListEntry> {
+        let address = eth_tx::parse_address_hex(&self.address)?;
+        let mut storage_keys = Vec::with_capacity(self.storage_keys.len());
+        for key in self.storage_keys {
+            storage_keys.push(eth_tx::parse_storage_key_hex(&key)?);
+        }
+        Ok(AccessListEntry {
+            address,
+            storage_keys,
+        })
+    }
+}
+
+fn zero_hex_string() -> String {
+    "0x0".to_string()
+}
+
+fn empty_hex_string() -> String {
+    "0x".to_string()
+}
+
 struct DerPublicKey {
     bytes: Vec<u8>,
 }
@@ -251,6 +453,30 @@ impl DerPublicKey {
 fn pem_decode(pem: &str) -> Result<Vec<u8>> {
     let der = DerPublicKey::from_public_key_pem(pem)?;
     Ok(der.into_bytes())
+}
+
+#[cfg(test)]
+fn sample_unsigned_tx_for_tests() -> UnsignedEip1559Tx {
+    UnsignedEip1559Tx {
+        chain_id: eth_tx::parse_scalar_hex("0x1").unwrap(),
+        nonce: eth_tx::parse_scalar_hex("0x0").unwrap(),
+        max_priority_fee_per_gas: eth_tx::parse_scalar_hex("0x1").unwrap(),
+        max_fee_per_gas: eth_tx::parse_scalar_hex("0x2").unwrap(),
+        gas_limit: eth_tx::parse_scalar_hex("0x5208").unwrap(),
+        to: Some(eth_tx::parse_address_hex("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap()),
+        value: eth_tx::parse_scalar_hex("0x0").unwrap(),
+        data: eth_tx::parse_data_hex("0x").unwrap(),
+        access_list: vec![AccessListEntry {
+            address: eth_tx::parse_address_hex("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                .unwrap(),
+            storage_keys: vec![
+                eth_tx::parse_storage_key_hex(
+                    "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                )
+                .unwrap(),
+            ],
+        }],
+    }
 }
 
 #[tokio::test]
@@ -414,6 +640,100 @@ async fn test_eth_sign_invalid_hash() {
     let resp = handler.handle_request(&head, body).await.unwrap();
 
     assert!(resp.status() == StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_eth_sign_tx_structured() {
+    use crate::nsm::StaticAttestationProvider;
+    use assert2::assert;
+
+    let handler =
+        ApiHandler::new(Box::new(StaticAttestationProvider::new(Vec::new())), None).unwrap();
+
+    let body = json::object! {
+        include_attestation: false,
+        payload: {
+            kind: "structured",
+            chain_id: "0x1",
+            nonce: "0x0",
+            max_priority_fee_per_gas: "0x1",
+            max_fee_per_gas: "0x2",
+            gas_limit: "0x5208",
+            to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            value: "0x0",
+            data: "0x",
+            access_list: [
+                {
+                    address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    storage_keys: [
+                        "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    ]
+                }
+            ]
+        }
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/eth/sign-tx")
+        .body(Bytes::from(json::stringify(body)))
+        .unwrap();
+
+    let (head, body) = req.into_parts();
+    let resp = handler.handle_request(&head, body).await.unwrap();
+
+    assert!(resp.status() == StatusCode::OK);
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let response: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    let raw_tx = response["raw_transaction"].as_str().unwrap();
+    assert!(raw_tx.starts_with("0x02"));
+    assert!(response["transaction_hash"].as_str().unwrap().len() == 66);
+    assert!(response["signature"].as_str().unwrap().len() == 132);
+    assert!(response["address"].as_str().unwrap().starts_with("0x"));
+    assert!(response["attestation"].is_null());
+}
+
+#[tokio::test]
+async fn test_eth_sign_tx_raw_payload() {
+    use crate::nsm::StaticAttestationProvider;
+    use assert2::assert;
+
+    let handler =
+        ApiHandler::new(Box::new(StaticAttestationProvider::new(Vec::new())), None).unwrap();
+
+    let unsigned_tx = sample_unsigned_tx_for_tests();
+    let raw_payload = format!("0x{}", hex::encode(unsigned_tx.signing_payload()));
+
+    let body = json::object! {
+        include_attestation: false,
+        payload: {
+            kind: "raw_rlp",
+            raw_payload: raw_payload,
+        }
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/eth/sign-tx")
+        .body(Bytes::from(json::stringify(body)))
+        .unwrap();
+
+    let (head, body) = req.into_parts();
+    let resp = handler.handle_request(&head, body).await.unwrap();
+
+    assert!(resp.status() == StatusCode::OK);
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let response: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert!(
+        response["raw_transaction"]
+            .as_str()
+            .unwrap()
+            .starts_with("0x02")
+    );
+    assert!(response["transaction_hash"].as_str().unwrap().len() == 66);
+    assert!(response["signature"].as_str().unwrap().len() == 132);
 }
 
 #[tokio::test]

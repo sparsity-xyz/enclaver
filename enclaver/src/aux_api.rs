@@ -4,8 +4,8 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::header::CONTENT_TYPE;
 use hyper::{Method, Request, Response, StatusCode, Uri};
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use serde_json::Value;
 
@@ -141,4 +141,3 @@ impl HttpHandler for AuxApiHandler {
         self.handle_request(&head, body).await
     }
 }
-
