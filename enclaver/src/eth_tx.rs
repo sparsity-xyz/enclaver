@@ -139,7 +139,7 @@ pub fn parse_address_hex(input: &str) -> Result<[u8; 20]> {
     if bytes.len() != 20 {
         return Err(anyhow!("address must be 20 bytes, found {}", bytes.len()));
     }
-    Ok(to_fixed_array::<20>(&bytes)?)
+    to_fixed_array::<20>(&bytes)
 }
 
 pub fn parse_storage_key_hex(input: &str) -> Result<[u8; 32]> {
@@ -150,7 +150,7 @@ pub fn parse_storage_key_hex(input: &str) -> Result<[u8; 32]> {
             bytes.len()
         ));
     }
-    Ok(to_fixed_array::<32>(&bytes)?)
+    to_fixed_array::<32>(&bytes)
 }
 
 pub fn keccak256(data: &[u8]) -> [u8; 32] {
