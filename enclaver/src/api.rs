@@ -455,30 +455,6 @@ fn pem_decode(pem: &str) -> Result<Vec<u8>> {
     Ok(der.into_bytes())
 }
 
-#[cfg(test)]
-fn sample_unsigned_tx_for_tests() -> UnsignedEip1559Tx {
-    UnsignedEip1559Tx {
-        chain_id: eth_tx::parse_scalar_hex("0x1").unwrap(),
-        nonce: eth_tx::parse_scalar_hex("0x0").unwrap(),
-        max_priority_fee_per_gas: eth_tx::parse_scalar_hex("0x1").unwrap(),
-        max_fee_per_gas: eth_tx::parse_scalar_hex("0x2").unwrap(),
-        gas_limit: eth_tx::parse_scalar_hex("0x5208").unwrap(),
-        to: Some(eth_tx::parse_address_hex("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap()),
-        value: eth_tx::parse_scalar_hex("0x0").unwrap(),
-        data: eth_tx::parse_data_hex("0x").unwrap(),
-        access_list: vec![AccessListEntry {
-            address: eth_tx::parse_address_hex("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-                .unwrap(),
-            storage_keys: vec![
-                eth_tx::parse_storage_key_hex(
-                    "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                )
-                .unwrap(),
-            ],
-        }],
-    }
-}
-
 #[tokio::test]
 async fn test_attestation_handler() {
     use crate::nsm::StaticAttestationProvider;
@@ -642,6 +618,30 @@ async fn test_eth_sign_invalid_hash() {
     assert!(resp.status() == StatusCode::BAD_REQUEST);
 }
 
+#[cfg(test)]
+fn sample_unsigned_tx_for_tests() -> UnsignedEip1559Tx {
+    UnsignedEip1559Tx {
+        chain_id: eth_tx::parse_scalar_hex("0x1").unwrap(),
+        nonce: eth_tx::parse_scalar_hex("0x0").unwrap(),
+        max_priority_fee_per_gas: eth_tx::parse_scalar_hex("0x1").unwrap(),
+        max_fee_per_gas: eth_tx::parse_scalar_hex("0x2").unwrap(),
+        gas_limit: eth_tx::parse_scalar_hex("0x5208").unwrap(),
+        to: Some(eth_tx::parse_address_hex("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap()),
+        value: eth_tx::parse_scalar_hex("0x0").unwrap(),
+        data: eth_tx::parse_data_hex("0x").unwrap(),
+        access_list: vec![AccessListEntry {
+            address: eth_tx::parse_address_hex("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                .unwrap(),
+            storage_keys: vec![
+                eth_tx::parse_storage_key_hex(
+                    "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                )
+                .unwrap(),
+            ],
+        }],
+    }
+}
+
 #[tokio::test]
 async fn test_eth_sign_tx_structured() {
     use crate::nsm::StaticAttestationProvider;
@@ -726,14 +726,12 @@ async fn test_eth_sign_tx_raw_payload() {
     let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let response: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
-    assert!(
-        response["raw_transaction"]
-            .as_str()
-            .unwrap()
-            .starts_with("0x02")
-    );
+    let raw_tx = response["raw_transaction"].as_str().unwrap();
+    assert!(raw_tx.starts_with("0x02"));
     assert!(response["transaction_hash"].as_str().unwrap().len() == 66);
     assert!(response["signature"].as_str().unwrap().len() == 132);
+    assert!(response["address"].as_str().unwrap().starts_with("0x"));
+    assert!(response["attestation"].is_null());
 }
 
 #[tokio::test]

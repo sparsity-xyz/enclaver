@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Error, Result, anyhow};
+use anyhow::{anyhow, Error, Result};
 use async_trait::async_trait;
 use aws_config::SdkConfig;
-use aws_credential_types::Credentials;
 use aws_credential_types::provider::ProvideCredentials;
+use aws_credential_types::Credentials;
 use aws_sigv4::http_request::{SignableBody, SignableRequest, SigningSettings};
 use aws_sigv4::sign::v4::SigningParams;
 use aws_smithy_runtime_api::client::identity::Identity;
@@ -14,7 +14,7 @@ use hyper::body::Bytes;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::http::uri::{Authority, Scheme};
 use hyper::{Method, Request, Response, StatusCode, Uri};
-use json::{JsonValue, object};
+use json::{object, JsonValue};
 use lazy_static::lazy_static;
 use log::{debug, trace};
 use regex::Regex;

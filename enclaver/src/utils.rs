@@ -1,10 +1,10 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use futures_util::stream::StreamExt;
-use log::{LevelFilter, info};
+use log::{info, LevelFilter};
 use std::future::Future;
 use std::path::PathBuf;
 use tokio::io::AsyncRead;
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::codec::{FramedRead, LinesCodec};
 
 const LOG_LINE_MAX_LEN: usize = 4 * 1024;
@@ -13,17 +13,16 @@ const LOG_LINE_MAX_LEN: usize = 4 * 1024;
 #[macro_export]
 macro_rules! spawn {
     ($name:expr, $body:expr) => {{
-        tokio::task::Builder::new()
-            .name($name)
-            .spawn($body)
-            .map_err(anyhow::Error::from)
+        tokio::task::Builder::new().name($name).spawn($body).map_err(anyhow::Error::from)
     }};
 }
 
 #[cfg(not(feature = "tracing"))]
 #[macro_export]
 macro_rules! spawn {
-    ($name:expr, $body:expr) => {{ Result::<_, anyhow::Error>::Ok(tokio::task::spawn($body)) }};
+    ($name:expr, $body:expr) => {{
+        Result::<_, anyhow::Error>::Ok(tokio::task::spawn($body))
+    }};
 }
 
 pub use spawn;
