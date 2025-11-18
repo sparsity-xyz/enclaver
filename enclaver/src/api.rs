@@ -735,6 +735,141 @@ async fn test_eth_sign_tx_raw_payload() {
 }
 
 #[tokio::test]
+async fn test_eth_sign_tx_signature_verification() {
+    use crate::nsm::StaticAttestationProvider;
+    use assert2::assert;
+
+    let handler =
+        ApiHandler::new(Box::new(StaticAttestationProvider::new(Vec::new())), None).unwrap();
+
+    // Get the handler's eth address for verification later
+    let address_req = Request::builder()
+        .method("GET")
+        .uri("/v1/eth/address")
+        .body(Bytes::new())
+        .unwrap();
+    let (head, body) = address_req.into_parts();
+    let resp = handler.handle_request(&head, body).await.unwrap();
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let addr_response: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let expected_address = addr_response["address"].as_str().unwrap();
+
+    // Create and sign a transaction
+    let body = json::object! {
+        include_attestation: false,
+        payload: {
+            kind: "structured",
+            chain_id: "0x1",
+            nonce: "0x9",
+            max_priority_fee_per_gas: "0x3b9aca00",
+            max_fee_per_gas: "0x77359400",
+            gas_limit: "0x5208",
+            to: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
+            value: "0xde0b6b3a7640000",
+            data: "0x",
+            access_list: []
+        }
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/eth/sign-tx")
+        .body(Bytes::from(json::stringify(body)))
+        .unwrap();
+
+    let (head, body) = req.into_parts();
+    let resp = handler.handle_request(&head, body).await.unwrap();
+
+    assert!(resp.status() == StatusCode::OK);
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let response: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    // Extract the signed transaction and verify it
+    let raw_tx_hex = response["raw_transaction"].as_str().unwrap();
+    let raw_tx = hex::decode(raw_tx_hex.strip_prefix("0x").unwrap()).unwrap();
+
+    // Verify the transaction starts with the EIP-1559 type prefix
+    assert!(raw_tx[0] == 0x02);
+
+    // Parse the signed transaction to extract signature components
+    let rlp = rlp::Rlp::new(&raw_tx[1..]);
+    assert!(rlp.item_count().unwrap() == 12); // EIP-1559 signed tx has 12 fields
+
+    // Extract signature components (last 3 fields)
+    let y_parity: u8 = rlp.val_at(9).unwrap();
+    let r_bytes: Vec<u8> = rlp.val_at(10).unwrap();
+    let s_bytes: Vec<u8> = rlp.val_at(11).unwrap();
+
+    // Verify y_parity is valid (0 or 1)
+    assert!(y_parity <= 1);
+
+    // Verify r and s are not zero
+    assert!(!r_bytes.is_empty());
+    assert!(!s_bytes.is_empty());
+
+    // Reconstruct the signing payload and verify the signature recovers to the correct address
+    let unsigned_tx = UnsignedEip1559Tx {
+        chain_id: eth_tx::parse_scalar_hex("0x1").unwrap(),
+        nonce: eth_tx::parse_scalar_hex("0x9").unwrap(),
+        max_priority_fee_per_gas: eth_tx::parse_scalar_hex("0x3b9aca00").unwrap(),
+        max_fee_per_gas: eth_tx::parse_scalar_hex("0x77359400").unwrap(),
+        gas_limit: eth_tx::parse_scalar_hex("0x5208").unwrap(),
+        to: Some(eth_tx::parse_address_hex("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb").unwrap()),
+        value: eth_tx::parse_scalar_hex("0xde0b6b3a7640000").unwrap(),
+        data: eth_tx::parse_data_hex("0x").unwrap(),
+        access_list: vec![],
+    };
+
+    let signing_payload = unsigned_tx.signing_payload();
+
+    // Verify the signature by recovering the public key
+    use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+    use sha3::{Digest, Keccak256};
+
+    let mut sig_bytes = [0u8; 64];
+
+    // Pad r and s to 32 bytes each
+    let r_padded = if r_bytes.len() < 32 {
+        let mut padded = vec![0u8; 32 - r_bytes.len()];
+        padded.extend_from_slice(&r_bytes);
+        padded
+    } else {
+        r_bytes.clone()
+    };
+
+    let s_padded = if s_bytes.len() < 32 {
+        let mut padded = vec![0u8; 32 - s_bytes.len()];
+        padded.extend_from_slice(&s_bytes);
+        padded
+    } else {
+        s_bytes.clone()
+    };
+
+    sig_bytes[..32].copy_from_slice(&r_padded);
+    sig_bytes[32..64].copy_from_slice(&s_padded);
+
+    let signature = Signature::from_bytes(&sig_bytes.into()).unwrap();
+    let recovery_id = RecoveryId::from_byte(y_parity).unwrap();
+
+    // Hash the signing payload
+    let digest = Keccak256::new_with_prefix(&signing_payload);
+
+    // Recover the public key from the signature
+    let recovered_key = VerifyingKey::recover_from_digest(digest, &signature, recovery_id).unwrap();
+
+    // Derive the Ethereum address from the recovered public key
+    let pub_bytes = recovered_key.to_encoded_point(false);
+    let hash = eth_tx::keccak256(&pub_bytes.as_bytes()[1..]);
+    let recovered_address = format!("0x{}", hex::encode(&hash[12..]));
+
+    // Verify the recovered address matches the handler's address
+    assert!(recovered_address == expected_address);
+
+    // Also verify it matches the address in the response
+    assert!(response["address"].as_str().unwrap() == expected_address);
+}
+
+#[tokio::test]
 async fn test_rng_handler() {
     use crate::nsm::StaticAttestationProvider;
     use assert2::assert;
