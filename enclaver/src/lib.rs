@@ -44,3 +44,6 @@ pub mod utils;
 pub mod http_util;
 
 pub mod eth_key;
+
+#[cfg(feature = "odyn")]
+pub mod eth_tx;

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use k256::ecdsa::{SigningKey, VerifyingKey, Signature, RecoveryId};
 use rand::rngs::OsRng;
 use sha3::{Digest, Keccak256};
@@ -16,6 +16,14 @@ impl EthKey {
         let signing_key = SigningKey::random(&mut OsRng);
         let verify_key = VerifyingKey::from(&signing_key);
         Self { signing_key, verify_key }
+    }
+
+    /// build from explicit entropy
+    pub fn from_entropy(entropy: [u8; 32]) -> Result<Self> {
+        let signing_key = SigningKey::from_bytes(&entropy.into())
+            .map_err(|e| anyhow!("invalid secp256k1 key from entropy: {:?}", e))?;
+        let verify_key = VerifyingKey::from(&signing_key);
+        Ok(Self { signing_key, verify_key })
     }
 
     /// import key from hex
