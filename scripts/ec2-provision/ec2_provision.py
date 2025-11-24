@@ -15,6 +15,8 @@ import argparse
 import logging
 import os
 import sys
+import time
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -157,8 +159,12 @@ def provision_ec2_instance(
         if auto_shutdown not in ("true", "false"):
             auto_shutdown = "true"
 
-        # Prepend export statement to user data script
-        user_data = f"export AUTO_SHUTDOWN={auto_shutdown}\n{user_data}"
+        # Insert export statement AFTER the shebang line
+        if user_data.startswith("#!/"):
+            lines = user_data.split('\n', 1)
+            user_data = f"{lines[0]}\nexport AUTO_SHUTDOWN={auto_shutdown}\n{lines[1] if len(lines) > 1 else ''}"
+        else:
+            user_data = f"#!/bin/bash\nexport AUTO_SHUTDOWN={auto_shutdown}\n{user_data}"
         logger.info(f"AUTO_SHUTDOWN set to: {auto_shutdown}")
     except Exception:
         logger.warning("ec2_user_data.sh not found, proceeding without user data")
@@ -338,6 +344,50 @@ def provision_ec2_instance(
     }
 
 
+def wait_for_instance_ready(ec2_client, instance_id: str, key_path: str, key_name: str) -> str:
+    """Wait for instance to be running and setup complete, return public IP."""
+    logger.info(f"Waiting for instance {instance_id} to be running...")
+
+    waiter = ec2_client.get_waiter('instance_running')
+    waiter.wait(InstanceIds=[instance_id])
+
+    # Get public IP
+    response = ec2_client.describe_instances(InstanceIds=[instance_id])
+    public_ip = response['Reservations'][0]['Instances'][0].get('PublicIpAddress')
+
+    if not public_ip:
+        logger.error("Instance has no public IP!")
+        return None
+
+    logger.info(f"Instance running with public IP: {public_ip}")
+
+    # Resolve key path
+    if not os.path.exists(key_path):
+        key_path = os.path.expanduser(f"~/.ssh/{key_name}.pem")
+
+    # Wait for setup to complete
+    logger.info("Waiting for dependency installation to complete (~2-3 min)...")
+
+    for i in range(30):
+        try:
+            result = subprocess.run(
+                ['ssh', '-i', key_path, '-o', 'StrictHostKeyChecking=no',
+                 '-o', 'ConnectTimeout=5', f'ec2-user@{public_ip}',
+                 'test -f /home/ec2-user/.enclaver-setup-complete && echo ready'],
+                capture_output=True, text=True, timeout=10
+            )
+            if 'ready' in result.stdout:
+                logger.info("Setup complete!")
+                return public_ip
+        except Exception:
+            pass
+        logger.info(f"  Waiting... ({i+1}/30)")
+        time.sleep(10)
+
+    logger.warning("Setup may not be complete. Check /var/log/cloud-init-output.log on instance.")
+    return public_ip
+
+
 def main():
     """Main CLI entrypoint."""
     parser = argparse.ArgumentParser(
@@ -345,8 +395,7 @@ def main():
     )
     parser.add_argument(
         "--region",
-        required=True,
-        help="AWS region to provision in (e.g., us-west-1)"
+        help="AWS region to provision in (default: from .env or us-west-1)"
     )
     parser.add_argument(
         "--config",
@@ -363,6 +412,17 @@ def main():
         action="store_true",
         help="Enable verbose debug logging"
     )
+    parser.add_argument(
+        "--wait",
+        action="store_true",
+        default=True,
+        help="Wait for instance to be ready (default: true)"
+    )
+    parser.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="Don't wait for instance to be ready"
+    )
 
     args = parser.parse_args()
 
@@ -378,15 +438,34 @@ def main():
     # Load environment config
     env_file = args.env
     if not env_file:
-        # Try to find .env in parent directory (project root)
-        parent_env = Path(__file__).parent.parent / ".env"
-        if parent_env.exists():
-            env_file = parent_env
+        # Try to find .env in the ec2-provision directory first
+        local_env = Path(__file__).parent / ".env"
+        if local_env.exists():
+            env_file = local_env
+        else:
+            # Try parent directory (project root)
+            parent_env = Path(__file__).parent.parent / ".env"
+            if parent_env.exists():
+                env_file = parent_env
 
     config = EC2ProvisionConfig(env_file)
 
+    # Get region from config if not provided
+    region = args.region or config.aws_region
+
     try:
-        result = provision_ec2_instance(args.region, config, config_file)
+        result = provision_ec2_instance(region, config, config_file)
+
+        # Load ec2.yaml to get key_name
+        cfg = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        key_name = cfg.get("key_name", "ank")
+        key_path = os.path.expanduser(f"~/.ssh/{key_name}.pem")
+
+        # Wait for instance if requested
+        public_ip = None
+        if not args.no_wait:
+            ec2_client = get_ec2_client(config, region)
+            public_ip = wait_for_instance_ready(ec2_client, result['instance_id'], key_path, key_name)
 
         print("\n" + "=" * 60)
         print("EC2 Instance Provisioned Successfully!")
@@ -394,12 +473,24 @@ def main():
         print(f"Instance ID:   {result['instance_id']}")
         print(f"Region:        {result['region']}")
         print(f"Private IP:    {result['private_ip']}")
+        if public_ip:
+            print(f"Public IP:     {public_ip}")
         print(f"CPU Total:     {result['cpu_total']} vCPUs")
         print(f"RAM Total:     {result['ram_mib_total']} MiB")
         print(f"CPU Free:      {result['cpu_free']} vCPUs")
         print(f"RAM Free:      {result['ram_mib_free']} MiB")
         print(f"Created At:    {result['created_at']}")
         print("=" * 60)
+
+        if public_ip:
+            print("\nTo deploy your local build:")
+            print(f"  export APPNODE_KEY={key_path}")
+            print(f"  export APPNODE=ec2-user@{public_ip}")
+            print("  ./scripts/build-docker-images.sh")
+            print("  ./scripts/deploy-images-to-node.sh")
+            print("")
+            print("Or run this one-liner:")
+            print(f"  APPNODE_KEY={key_path} APPNODE=ec2-user@{public_ip} ./scripts/build-docker-images.sh && APPNODE_KEY={key_path} APPNODE=ec2-user@{public_ip} ./scripts/deploy-images-to-node.sh")
 
         return 0
 

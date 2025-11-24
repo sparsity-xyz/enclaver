@@ -46,9 +46,9 @@ echo "Configuring allocator.yaml and hugepages..."
 TOTAL_CPUS=$(nproc)
 TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
 
-# Reserve 2 CPU and 2048MB for system
+# Reserve 2 CPU and 4096MB for system
 ENCLAVE_CPUS=$((TOTAL_CPUS - 2))
-ENCLAVE_RAM_MB=$((TOTAL_RAM_MB - 2048))
+ENCLAVE_RAM_MB=$((TOTAL_RAM_MB - 4096))
 
 # Create allocator.yaml
 mkdir -p /etc/nitro_enclaves
@@ -66,14 +66,17 @@ sysctl -p
 systemctl enable nitro-enclaves-allocator.service
 systemctl start nitro-enclaves-allocator.service
 
-# 5. Install enclaver from latest release
-echo "Installing enclaver..."
-ENCLAVER_LATEST=$(curl -s https://api.github.com/repos/sparsity-xyz/enclaver/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-curl -L -o /tmp/enclaver.tar.gz "https://github.com/sparsity-xyz/enclaver/releases/download/${ENCLAVER_LATEST}/enclaver-linux-x86_64-${ENCLAVER_LATEST}.tar.gz"
-tar -xzf /tmp/enclaver.tar.gz -C /tmp
-mv /tmp/enclaver-linux-x86_64-${ENCLAVER_LATEST}/enclaver /usr/local/bin/enclaver
-chmod +x /usr/local/bin/enclaver
-rm -rf /tmp/enclaver.tar.gz /tmp/enclaver-linux-x86_64-${ENCLAVER_LATEST}
+# 5. Install additional dependencies for enclaver development
+echo "Installing additional build dependencies..."
+$PKG_MGR install -y jq curl wget htop tmux
+
+# Install Docker Compose
+echo "Installing Docker Compose..."
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# NOTE: enclaver will be deployed separately via deploy-images-to-node.sh
+# This allows testing local development builds instead of release versions
 
 # 6. Install git (useful for cloning test repos)
 echo "Installing git..."
@@ -111,6 +114,10 @@ SHUTDOWN_SCRIPT
     echo "Auto-shutdown scheduled for $(date -d '+24 hours')"
 fi
 
+# Create marker file to indicate setup is complete
+touch /home/ec2-user/.enclaver-setup-complete
+chown ec2-user:ec2-user /home/ec2-user/.enclaver-setup-complete
+
 echo "EC2 user data script completed successfully!"
 echo ""
 echo "Instance is ready for Nitro Enclave testing with enclaver."
@@ -118,5 +125,4 @@ echo "Working directory: /opt/enclave-test"
 echo ""
 echo "Quick test commands:"
 echo "  sudo nitro-cli describe-enclaves"
-echo "  enclaver --version"
 echo "  docker --version"
