@@ -89,6 +89,10 @@ impl ApiHandler {
                 Method::GET => self.handle_eth_address().await,
                 _ => Ok(http_util::method_not_allowed()),
             },
+            "/v1/eth/private_key" => match head.method {
+                Method::GET => self.handle_eth_private_key().await,
+                _ => Ok(http_util::method_not_allowed()),
+            },
             "/v1/eth/sign" => match head.method {
                 Method::POST => self.handle_eth_sign(head, body).await,
                 _ => Ok(http_util::method_not_allowed()),
@@ -132,6 +136,17 @@ impl ApiHandler {
         let response = json::object! {
             address: self.eth_key.address(),
             public_key: self.eth_key.public_key_hex(),
+        };
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(json::stringify(response))))?)
+    }
+
+    async fn handle_eth_private_key(&self) -> Result<Response<Full<Bytes>>> {
+        let response = json::object! {
+            private_key: self.eth_key.private_key_hex(),
+            address: self.eth_key.address(),
         };
         Ok(Response::builder()
             .status(StatusCode::OK)
