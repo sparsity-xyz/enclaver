@@ -1,0 +1,72 @@
+# EC2 provisioning defaults for registry-node
+# Edit this file to configure AMI, instance type and optional defaults for
+# block devices, networking, metadata and private DNS options.
+
+# Per-region AMI mapping (preferred). Replace the example AMIs with real
+# AMI IDs for the corresponding regions. If `ami_by_region` is provided,
+# the provisioning code will pick the AMI for the requested region. If not
+# provided, `ami_id` is used as a global fallback.
+ami_by_region:
+  us-west-1: "ami-0be87055cd1c16e86"
+  us-east-1: "ami-0be87055cd1c16e86"
+  ap-northeast-2: "ami-0f810accf42b4af77"
+
+# Fallback: a single AMI to use in all regions if `ami_by_region` is not set.
+ami_id: "ami-0be87055cd1c16e86"
+
+# Instance type to launch for nova app nodes
+# Instance type to launch for nova app nodes
+instance_type: "c6i.2xlarge"
+
+# SSH keypair name to use on launched instances
+key_name: "tee-test"  # Seoul (ap-northeast-2)
+# key_name: "app-node-key"  # us-west-1
+
+# Optional EBS configuration (will be used for /dev/xvda)
+ebs:
+  device_name: "/dev/xvda"
+  encrypted: false
+  delete_on_termination: true
+  # snapshot_id: "snap-016e261f1627f4b18"  # Region-specific, commented out
+  volume_size: 50
+  volume_type: "gp3"
+  iops: 3000
+  throughput: 125
+
+# Network configuration: security group IDs and subnet
+network:
+  security_group_ids:
+    - "sg-041f2bc2cd5a53d52"  # Seoul (ap-northeast-2) security group
+    # - "sg-026d4c8f6275bc43e"  # us-west-1 security group
+  subnet_id: "subnet-d28a8dba"  # Seoul (ap-northeast-2) subnet
+  # subnet_id: "subnet-0b43f3a7bdc5166b7"  # us-west-1 subnet
+  associate_public_ip: true
+
+# Enclave options (Nitro Enclaves)
+enclave:
+  enabled: true
+
+# Metadata service options
+metadata:
+  http_endpoint: "enabled"
+  http_put_response_hop_limit: 2
+  http_tokens: "optional"
+
+# Private DNS options
+private_dns:
+  hostname_type: "ip-name"
+  enable_dns_a: true
+  enable_dns_aaaa: false
+
+# IAM instance profile to attach to launched instances (Arn)
+iam_instance_profile_arn: "arn:aws:iam::004118891089:instance-profile/Nova-App-Node-Role"
+
+# Optional tags for instances. Can be a map or list. Example map:
+# tags:
+#   Environment: staging
+#   Owner: operations
+
+# Default tags (will be used if `tags` is not provided)
+tags:
+  Name: "nova-app-node"
+  Service: "sparsity-nova"

@@ -3,12 +3,13 @@
 set -eu
 
 # ---------------------------------------------------------------------------
-# deploy-images-to-node.sh - Pack and deploy Docker images to a remote node
+# deploy-images-to-node.sh - Pack and deploy Docker images and enclaver binary to a remote node
 #
 # This script:
 #   1. Saves existing Docker images to tar files
 #   2. Copies them to $APPNODE
 #   3. Loads them into Docker on the remote node
+#   4. Deploys the enclaver binary to /usr/local/bin
 #
 # Prerequisites:
 #   - Docker images must already exist (build them with build-docker-images.sh first)
@@ -114,6 +115,21 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Detect architecture for enclaver binary
+local_arch=$(uname -m)
+case $local_arch in
+    x86_64)
+        rust_target="x86_64-unknown-linux-musl"
+        ;;
+    aarch64)
+        rust_target="aarch64-unknown-linux-musl"
+        ;;
+    *)
+        echo "Unsupported architecture: $local_arch"
+        exit 1
+        ;;
+esac
+
 # Step 1: Verify images exist
 echo "Step 1: Verifying Docker images exist..."
 if ! docker image inspect "$ODYN_TAG" >/dev/null 2>&1; then
@@ -204,16 +220,41 @@ ssh -i $APPNODE_KEY "$APP_USER@$APP_HOST" <<EOF
     docker images | grep -E "($ODYN_TAG|$WRAPPER_TAG)" | head -2
 EOF
 
-if [ $? -eq 0 ]; then
-    echo ""
-    echo "✓ Deployment complete!"
-    echo ""
-    echo "Images available on $APP_USER@$APP_HOST:"
-    echo "  - $ODYN_TAG"
-    echo "  - $WRAPPER_TAG"
-else
+if [ $? -ne 0 ]; then
     echo ""
     echo "✗ Deployment failed during image loading"
     exit 1
 fi
+
+# Step 5: Deploy enclaver binary
+echo ""
+echo "Step 5: Deploying enclaver binary..."
+ENCLAVER_BIN="$SCRIPT_DIR/../enclaver/target/${rust_target}/${BUILD_MODE}/enclaver"
+
+if [ ! -f "$ENCLAVER_BIN" ]; then
+    echo "  Warning: enclaver binary not found at $ENCLAVER_BIN"
+    echo "  Build it with: cd enclaver && cross build --target $rust_target --features run_enclave"
+else
+    ENCLAVER_SIZE=$(du -h "$ENCLAVER_BIN" | cut -f1)
+    echo "  Copying enclaver binary ($ENCLAVER_SIZE)..."
+    scp -i $APPNODE_KEY "$ENCLAVER_BIN" "$APP_USER@$APP_HOST:/tmp/enclaver" || {
+        echo "Error: Failed to copy enclaver binary"
+        exit 1
+    }
+
+    ssh -i $APPNODE_KEY "$APP_USER@$APP_HOST" "sudo mv /tmp/enclaver /usr/local/bin/enclaver && sudo chmod +x /usr/local/bin/enclaver" || {
+        echo "Error: Failed to install enclaver binary"
+        exit 1
+    }
+
+    echo "  ✓ enclaver binary installed"
+fi
+
+echo ""
+echo "✓ Deployment complete!"
+echo ""
+echo "Available on $APP_USER@$APP_HOST:"
+echo "  - $ODYN_TAG"
+echo "  - $WRAPPER_TAG"
+echo "  - /usr/local/bin/enclaver"
 
