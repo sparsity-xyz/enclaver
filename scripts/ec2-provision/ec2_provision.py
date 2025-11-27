@@ -379,8 +379,9 @@ def wait_for_instance_ready(ec2_client, instance_id: str, key_path: str, key_nam
             if 'ready' in result.stdout:
                 logger.info("Setup complete!")
                 return public_ip
-        except Exception:
-            pass
+        except Exception as e:
+            # Ignore exceptions as the instance may not be ready yet; will retry.
+            logger.debug(f"Attempt {i+1}: Exception while checking setup completion: {e}")
         logger.info(f"  Waiting... ({i+1}/30)")
         time.sleep(10)
 
