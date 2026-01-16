@@ -46,6 +46,83 @@ pub fn load_server_config<P1: AsRef<Path>, P2: AsRef<Path>>(
     ))
 }
 
+/// OID for Nova Attestation Extension (1.3.6.1.4.1.99999.1)
+/// This is a private enterprise OID space for Nova platform.
+pub const NOVA_ATTESTATION_OID: &str = "1.3.6.1.4.1.99999.1";
+
+/// Generate an RA-TLS server configuration with embedded attestation document.
+/// 
+/// This creates a self-signed certificate with the attestation document
+/// embedded in a custom X.509 extension.
+#[cfg(feature = "odyn")]
+pub fn generate_ratls_server_config(
+    attestation_doc: &[u8],
+) -> Result<(Arc<ServerConfig>, Vec<u8>, Vec<u8>)> {
+    use rand::rngs::OsRng;
+    use p384::SecretKey;
+    use p384::elliptic_curve::sec1::ToEncodedPoint;
+    
+    init_crypto_provider();
+    
+    // Generate a new P-384 key pair for the TLS certificate
+    let secret_key = SecretKey::random(&mut OsRng);
+    let public_key = secret_key.public_key();
+    let public_key_bytes = public_key.to_encoded_point(false);
+    
+    // Build a self-signed certificate with embedded attestation
+    // For now, we create a simple DER certificate structure
+    // In production, this should use a proper X.509 library like rcgen
+    
+    let cert_der = build_ratls_certificate(public_key_bytes.as_bytes(), attestation_doc)?;
+    let key_der = secret_key.to_sec1_der()
+        .map_err(|e| anyhow!("Failed to serialize private key: {}", e))?
+        .to_vec();
+    
+    // Parse the certificate for rustls
+    let cert = CertificateDer::from(cert_der.clone());
+    let private_key = PrivateKeyDer::try_from(key_der.clone())
+        .map_err(|e| anyhow!("Failed to parse private key DER: {:?}", e))?;
+    
+    let config = Arc::new(
+        ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], private_key)?,
+    );
+    
+    Ok((config, cert_der, key_der))
+}
+
+/// Build a minimal X.509 certificate with embedded attestation.
+/// 
+/// This creates a DER-encoded certificate with:
+/// - Subject: CN=Nova RA-TLS
+/// - Validity: 1 year
+/// - Extension: Nova Attestation (OID 1.3.6.1.4.1.99999.1)
+#[cfg(feature = "odyn")]
+fn build_ratls_certificate(public_key: &[u8], attestation: &[u8]) -> Result<Vec<u8>> {
+    // For a proper implementation, use rcgen crate
+    // This is a placeholder that returns a minimal certificate structure
+    // 
+    // TODO: Replace with rcgen-based implementation:
+    // let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string()]);
+    // params.custom_extensions.push(rcgen::CustomExtension::from_oid_content(
+    //     &NOVA_ATTESTATION_OID.split('.').map(|s| s.parse().unwrap()).collect::<Vec<u64>>(),
+    //     attestation.to_vec()
+    // ));
+    // let cert = rcgen::Certificate::from_params(params)?;
+    // Ok(cert.serialize_der()?)
+    
+    log::info!("RA-TLS certificate generation: public_key len={}, attestation len={}", 
+               public_key.len(), attestation.len());
+    
+    // For now, return an error indicating this needs proper implementation
+    Err(anyhow!(
+        "RA-TLS certificate generation requires rcgen crate. \
+         Add 'rcgen = \"0.12\"' to Cargo.toml and implement proper X.509 generation."
+    ))
+}
+
+
 pub fn load_client_config(cert: impl AsRef<Path> + 'static) -> Result<Arc<ClientConfig>> {
     init_crypto_provider();
 

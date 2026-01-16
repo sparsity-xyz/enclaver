@@ -22,6 +22,7 @@ impl ApiService {
             let handler = ApiHandler::new(
                 Box::new(NsmAttestationProvider::new(nsm.clone())),
                 Some(nsm),
+                config.manifest.storage.clone(),
             )?;
 
             Some(tokio::task::spawn(async move {

@@ -15,6 +15,8 @@ use crate::eth_key::EthKey;
 use crate::eth_tx::{self, AccessListEntry, TxSignature, UnsignedEip1559Tx};
 use crate::http_util::{self, HttpHandler};
 use crate::nsm::{AttestationParams, AttestationProvider, Nsm};
+use crate::state::{StateManager, StateSaveRequest};
+use crate::manifest::StorageConfig;
 
 const MIME_APPLICATION_CBOR: &str = "application/cbor";
 
@@ -23,12 +25,14 @@ pub struct ApiHandler {
     eth_key: Arc<EthKey>,
     encryption_key: Arc<EncryptionKey>,
     nsm: Option<Arc<Nsm>>,
+    state_manager: Option<Arc<StateManager>>,
 }
 
 impl ApiHandler {
     pub fn new(
         attester: Box<dyn AttestationProvider + Send + Sync>,
         nsm: Option<Arc<Nsm>>,
+        storage_config: Option<StorageConfig>,
     ) -> Result<Self> {
         let eth_key = match nsm.as_ref() {
             Some(nsm_ref) => match Self::collect_random_bytes(nsm_ref, 32).and_then(|bytes| {
@@ -79,11 +83,21 @@ impl ApiHandler {
         };
         log::info!("Enclave P-384 public key: {}", encryption_key.public_key_hex());
 
+        let state_manager = if let Some(config) = storage_config {
+            log::info!("Initializing StateManager for S3 bucket: {}", config.s3_bucket);
+            Some(Arc::new(
+                tokio::runtime::Handle::current().block_on(StateManager::new(config, encryption_key.clone()))?
+            ))
+        } else {
+            None
+        };
+
         Ok(Self {
             attester,
             eth_key,
             encryption_key,
             nsm,
+            state_manager,
         })
     }
 
@@ -142,7 +156,44 @@ impl ApiHandler {
                 Method::POST => self.handle_encryption_encrypt(body).await,
                 _ => Ok(http_util::method_not_allowed()),
             },
+            "/v1/state/save" => match head.method {
+                Method::POST => self.handle_state_save(body).await,
+                _ => Ok(http_util::method_not_allowed()),
+            },
+            "/v1/state/load" => match head.method {
+                Method::GET => self.handle_state_load().await,
+                _ => Ok(http_util::method_not_allowed()),
+            },
             _ => Ok(http_util::not_found()),
+        }
+    }
+
+    async fn handle_state_save(&self, body: Bytes) -> Result<Response<Full<Bytes>>> {
+        let manager = match &self.state_manager {
+            Some(m) => m,
+            None => return Ok(http_util::bad_request("Persistence not configured")),
+        };
+
+        let req: StateSaveRequest = match serde_json::from_slice(&body) {
+            Ok(req) => req,
+            Err(err) => return Ok(http_util::bad_request(err.to_string())),
+        };
+
+        match manager.save(req).await {
+            Ok(resp) => Ok(http_util::json_response(resp)),
+            Err(err) => Ok(http_util::internal_server_error(err.to_string())),
+        }
+    }
+
+    async fn handle_state_load(&self) -> Result<Response<Full<Bytes>>> {
+        let manager = match &self.state_manager {
+            Some(m) => m,
+            None => return Ok(http_util::bad_request("Persistence not configured")),
+        };
+
+        match manager.load().await {
+            Ok(resp) => Ok(http_util::json_response(resp)),
+            Err(err) => Ok(http_util::internal_server_error(err.to_string())),
         }
     }
 

@@ -25,6 +25,7 @@ pub struct Manifest {
     pub api: Option<Api>,
     pub aux_api: Option<AuxApi>,
     pub vsock_ports: Option<VsockPorts>,
+    pub storage: Option<StorageConfig>,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -47,6 +48,9 @@ pub struct Signature {
 pub struct Ingress {
     pub listen_port: u16,
     pub tls: Option<ServerTls>,
+    /// Enable RA-TLS (Remote Attestation TLS) for this ingress.
+    /// When true, Odyn will generate an RA-TLS certificate with attestation quote.
+    pub ratls: Option<bool>,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -96,6 +100,18 @@ pub struct VsockPorts {
     pub status_port: Option<u32>,
     pub app_log_port: Option<u32>,
     pub http_egress_port: Option<u32>,
+}
+
+/// Configuration for encrypted state persistence in S3.
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageConfig {
+    /// S3 bucket name for state storage.
+    pub s3_bucket: String,
+    /// AWS region for S3 bucket.
+    pub s3_region: String,
+    /// Optional prefix (folder) within the bucket.
+    pub s3_prefix: Option<String>,
 }
 
 fn parse_manifest(buf: &[u8]) -> Result<Manifest> {
