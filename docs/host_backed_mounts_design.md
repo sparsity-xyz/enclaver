@@ -3,6 +3,10 @@
 This document describes the current Enclaver design and implementation for
 host-backed persistent directories inside Nitro Enclaves.
 
+Nova Platform refers to the same capability as a Host-Backed Temporary Directory Mount.
+In Enclaver itself, the underlying primitive is a manifest-declared
+`storage.mounts[]` entry plus a runtime `--mount <name>=<host_state_dir>` binding.
+
 ## Goal
 
 - let an enclave application use a normal directory such as `/mnt/appdata`
