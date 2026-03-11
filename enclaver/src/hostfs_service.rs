@@ -12,6 +12,8 @@ use crate::fs_protocol::{
     HOSTFS_PROTOCOL_VERSION, HelloResponse, recv_msg, send_msg,
 };
 
+const MAX_READ_FILE_LEN: u32 = 1024 * 1024;
+
 pub struct HostFsService {
     mount_name: String,
     root: PathBuf,
@@ -181,7 +183,7 @@ impl HostFsService {
         &self,
         path: &str,
     ) -> std::result::Result<FsProxyResponse, FsProxyError> {
-        let resolved = self.resolve_path_preserving_leaf(path, true)?;
+        let resolved = self.resolve_path_preserving_leaf(path, true).await?;
         let metadata = tokio::task::spawn_blocking(move || std::fs::symlink_metadata(&resolved))
             .await
             .map_err(join_error_to_proxy_error)?
@@ -194,7 +196,7 @@ impl HostFsService {
         &self,
         path: &str,
     ) -> std::result::Result<FsProxyResponse, FsProxyError> {
-        let resolved = self.resolve_existing_path(path)?;
+        let resolved = self.resolve_existing_path(path).await?;
         let mut dir = fs::read_dir(&resolved)
             .await
             .map_err(io_error_to_proxy_error)?;
@@ -218,7 +220,13 @@ impl HostFsService {
         offset: u64,
         len: u32,
     ) -> std::result::Result<FsProxyResponse, FsProxyError> {
-        let resolved = self.resolve_existing_path(path)?;
+        if len > MAX_READ_FILE_LEN {
+            return Err(invalid_input(format!(
+                "read length {len} exceeds hostfs max read size {MAX_READ_FILE_LEN}"
+            )));
+        }
+
+        let resolved = self.resolve_existing_path(path).await?;
         let mut file = OpenOptions::new()
             .read(true)
             .open(&resolved)
@@ -245,7 +253,7 @@ impl HostFsService {
         create: bool,
         truncate: bool,
     ) -> std::result::Result<FsProxyResponse, FsProxyError> {
-        let resolved = self.resolve_path_for_create(path)?;
+        let resolved = self.resolve_path_for_create(path).await?;
 
         let mut options = OpenOptions::new();
         options.write(true).create(create).truncate(truncate);
@@ -271,7 +279,7 @@ impl HostFsService {
         path: &str,
         size: u64,
     ) -> std::result::Result<FsProxyResponse, FsProxyError> {
-        let resolved = self.resolve_path_for_create(path)?;
+        let resolved = self.resolve_path_for_create(path).await?;
         let file = OpenOptions::new()
             .write(true)
             .open(&resolved)
@@ -287,7 +295,7 @@ impl HostFsService {
         path: &str,
         recursive: bool,
     ) -> std::result::Result<FsProxyResponse, FsProxyError> {
-        let resolved = self.resolve_path_for_create(path)?;
+        let resolved = self.resolve_path_for_create(path).await?;
         if recursive {
             fs::create_dir_all(&resolved)
                 .await
@@ -304,7 +312,7 @@ impl HostFsService {
         &self,
         path: &str,
     ) -> std::result::Result<FsProxyResponse, FsProxyError> {
-        let resolved = self.resolve_path_preserving_leaf(path, false)?;
+        let resolved = self.resolve_path_preserving_leaf(path, false).await?;
         fs::remove_file(&resolved)
             .await
             .map_err(io_error_to_proxy_error)?;
@@ -315,7 +323,7 @@ impl HostFsService {
         &self,
         path: &str,
     ) -> std::result::Result<FsProxyResponse, FsProxyError> {
-        let resolved = self.resolve_path_preserving_leaf(path, false)?;
+        let resolved = self.resolve_path_preserving_leaf(path, false).await?;
         fs::remove_dir(&resolved)
             .await
             .map_err(io_error_to_proxy_error)?;
@@ -327,8 +335,8 @@ impl HostFsService {
         from: &str,
         to: &str,
     ) -> std::result::Result<FsProxyResponse, FsProxyError> {
-        let from = self.resolve_path_preserving_leaf(from, false)?;
-        let to = self.resolve_path_for_create(to)?;
+        let from = self.resolve_path_preserving_leaf(from, false).await?;
+        let to = self.resolve_path_for_create(to).await?;
         fs::rename(&from, &to)
             .await
             .map_err(io_error_to_proxy_error)?;
@@ -336,7 +344,7 @@ impl HostFsService {
     }
 
     async fn handle_fsync(&self, path: &str) -> std::result::Result<FsProxyResponse, FsProxyError> {
-        let resolved = self.resolve_existing_path(path)?;
+        let resolved = self.resolve_existing_path(path).await?;
         let file = OpenOptions::new()
             .read(true)
             .open(&resolved)
@@ -357,75 +365,128 @@ impl HostFsService {
         }
     }
 
-    fn resolve_existing_path(&self, path: &str) -> std::result::Result<PathBuf, FsProxyError> {
+    async fn resolve_existing_path(
+        &self,
+        path: &str,
+    ) -> std::result::Result<PathBuf, FsProxyError> {
         let relative = normalize_relative_path(path)?;
-        self.resolve_follow_path(&relative)
+        self.resolve_follow_path(relative).await
     }
 
-    fn resolve_follow_path(&self, relative: &Path) -> std::result::Result<PathBuf, FsProxyError> {
-        let joined = self.root.join(relative);
-        let canonical = std::fs::canonicalize(&joined).map_err(io_error_to_proxy_error)?;
-        self.ensure_within_root(&canonical)?;
-        Ok(canonical)
+    async fn resolve_follow_path(
+        &self,
+        relative: PathBuf,
+    ) -> std::result::Result<PathBuf, FsProxyError> {
+        let root = self.root.clone();
+        let mount_name = self.mount_name.clone();
+        tokio::task::spawn_blocking(move || resolve_follow_path_sync(&root, &mount_name, &relative))
+            .await
+            .map_err(join_error_to_proxy_error)?
     }
 
-    fn resolve_path_for_create(&self, path: &str) -> std::result::Result<PathBuf, FsProxyError> {
+    async fn resolve_path_for_create(
+        &self,
+        path: &str,
+    ) -> std::result::Result<PathBuf, FsProxyError> {
         let relative = normalize_relative_path(path)?;
-        if relative.as_os_str().is_empty() {
-            return Err(invalid_input("path must not refer to the mount root"));
-        }
-
-        let mut current = self.root.clone();
-        for component in relative.components() {
-            let Component::Normal(part) = component else {
-                return Err(invalid_input("hostfs path contains an invalid component"));
-            };
-            current.push(part);
-            if current.exists() {
-                current = std::fs::canonicalize(&current).map_err(io_error_to_proxy_error)?;
-                self.ensure_within_root(&current)?;
-            }
-        }
-
-        Ok(current)
+        let root = self.root.clone();
+        let mount_name = self.mount_name.clone();
+        tokio::task::spawn_blocking(move || {
+            resolve_path_for_create_sync(&root, &mount_name, &relative)
+        })
+        .await
+        .map_err(join_error_to_proxy_error)?
     }
 
-    fn resolve_path_preserving_leaf(
+    async fn resolve_path_preserving_leaf(
         &self,
         path: &str,
         allow_root: bool,
     ) -> std::result::Result<PathBuf, FsProxyError> {
         let relative = normalize_relative_path(path)?;
-        if relative.as_os_str().is_empty() {
-            if allow_root {
-                return Ok(self.root.clone());
-            }
-            return Err(invalid_input("path must not refer to the mount root"));
-        }
+        let root = self.root.clone();
+        let mount_name = self.mount_name.clone();
+        tokio::task::spawn_blocking(move || {
+            resolve_path_preserving_leaf_sync(&root, &mount_name, &relative, allow_root)
+        })
+        .await
+        .map_err(join_error_to_proxy_error)?
+    }
+}
 
-        let parent = relative.parent().unwrap_or_else(|| Path::new(""));
-        let parent = if parent.as_os_str().is_empty() {
-            self.root.clone()
-        } else {
-            self.resolve_follow_path(parent)?
-        };
+fn resolve_follow_path_sync(
+    root: &Path,
+    mount_name: &str,
+    relative: &Path,
+) -> std::result::Result<PathBuf, FsProxyError> {
+    let joined = root.join(relative);
+    let canonical = std::fs::canonicalize(&joined).map_err(io_error_to_proxy_error)?;
+    ensure_within_root(root, mount_name, &canonical)?;
+    Ok(canonical)
+}
 
-        let leaf = relative
-            .file_name()
-            .ok_or_else(|| invalid_input("hostfs path must refer to a filesystem entry"))?;
-
-        Ok(parent.join(leaf))
+fn resolve_path_for_create_sync(
+    root: &Path,
+    mount_name: &str,
+    relative: &Path,
+) -> std::result::Result<PathBuf, FsProxyError> {
+    if relative.as_os_str().is_empty() {
+        return Err(invalid_input("path must not refer to the mount root"));
     }
 
-    fn ensure_within_root(&self, path: &Path) -> std::result::Result<(), FsProxyError> {
-        if path == self.root || path.starts_with(&self.root) {
-            Ok(())
-        } else {
-            Err(invalid_input(format!(
-                "hostfs path escapes mount root '{}'",
-                self.mount_name
-            )))
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            return Err(invalid_input("hostfs path contains an invalid component"));
+        };
+        current.push(part);
+        if current.exists() {
+            current = std::fs::canonicalize(&current).map_err(io_error_to_proxy_error)?;
+            ensure_within_root(root, mount_name, &current)?;
         }
+    }
+
+    Ok(current)
+}
+
+fn resolve_path_preserving_leaf_sync(
+    root: &Path,
+    mount_name: &str,
+    relative: &Path,
+    allow_root: bool,
+) -> std::result::Result<PathBuf, FsProxyError> {
+    if relative.as_os_str().is_empty() {
+        if allow_root {
+            return Ok(root.to_path_buf());
+        }
+        return Err(invalid_input("path must not refer to the mount root"));
+    }
+
+    let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+    let parent = if parent.as_os_str().is_empty() {
+        root.to_path_buf()
+    } else {
+        resolve_follow_path_sync(root, mount_name, parent)?
+    };
+
+    let leaf = relative
+        .file_name()
+        .ok_or_else(|| invalid_input("hostfs path must refer to a filesystem entry"))?;
+
+    Ok(parent.join(leaf))
+}
+
+fn ensure_within_root(
+    root: &Path,
+    mount_name: &str,
+    path: &Path,
+) -> std::result::Result<(), FsProxyError> {
+    if path == root || path.starts_with(root) {
+        Ok(())
+    } else {
+        Err(invalid_input(format!(
+            "hostfs path escapes mount root '{mount_name}'"
+        )))
     }
 }
 
@@ -490,7 +551,9 @@ fn join_error_to_proxy_error(err: tokio::task::JoinError) -> FsProxyError {
 }
 
 fn nix_error_to_proxy_error(err: nix::Error) -> FsProxyError {
-    FsProxyError::new(Some(err as i32), err.to_string())
+    // In nix 0.24, nix::Error is a type alias for Errno.
+    let os_code = err as i32;
+    FsProxyError::new(Some(os_code), err.to_string())
 }
 
 fn is_unexpected_eof(err: &anyhow::Error) -> bool {
@@ -674,6 +737,39 @@ mod tests {
 
         assert!(stat.total_bytes > 0);
         assert!(stat.available_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_reads() {
+        let root = tempdir().unwrap();
+        std::fs::write(root.path().join("hello.txt"), b"hello").unwrap();
+
+        let service = HostFsService::new("appdata", root.path(), false).unwrap();
+        let mut client = connect(service).await;
+        let _ = hello(&mut client, "appdata").await;
+
+        send_msg(
+            &mut client,
+            &FsProxyRequest::ReadFile {
+                path: "hello.txt".to_string(),
+                offset: 0,
+                len: MAX_READ_FILE_LEN + 1,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            recv_msg::<_, FsProxyResponse>(&mut client).await.unwrap(),
+            FsProxyResponse::Error(FsProxyError::new(
+                Some(EINVAL),
+                format!(
+                    "read length {} exceeds hostfs max read size {}",
+                    MAX_READ_FILE_LEN + 1,
+                    MAX_READ_FILE_LEN
+                ),
+            ))
+        );
     }
 
     #[cfg(unix)]

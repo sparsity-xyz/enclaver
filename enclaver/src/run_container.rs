@@ -151,8 +151,6 @@ impl Sleeve {
             .ok_or_else(|| anyhow!("missing wait response from daemon",))?
             .status_code;
 
-        self.container_id = None;
-
         if status_code != 0 {
             return Err(anyhow!("non-zero exit code from container",));
         }
@@ -161,6 +159,7 @@ impl Sleeve {
         self.docker
             .remove_container(&container_id, None::<RemoveContainerOptions>)
             .await?;
+        self.container_id = None;
 
         Ok(())
     }

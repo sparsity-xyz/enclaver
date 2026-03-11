@@ -11,8 +11,8 @@ use fuse_mt::{
     CreatedEntry, DirectoryEntry, FileAttr, FileType, FilesystemMT, FuseMT, RequestInfo, Statfs,
 };
 use fuser::{BackgroundSession, MountOption};
-use libc::{EEXIST, EINVAL, O_ACCMODE, O_RDONLY, O_TRUNC};
 use log::{info, warn};
+use nix::libc::{self, EEXIST, EINVAL, O_ACCMODE, O_RDONLY, O_TRUNC};
 use nix::sys::stat::{Mode, SFlag, makedev, mknod};
 use tokio::runtime::Handle;
 use tokio_vsock::VsockStream;
@@ -132,7 +132,7 @@ impl MountedHostFs {
             runtime: Handle::current(),
         };
 
-        let mut options = vec![
+        let options = vec![
             MountOption::FSName(format!("hostfs-{}", mount.name)),
             MountOption::Subtype("hostfs".to_string()),
             MountOption::NoDev,
@@ -317,7 +317,7 @@ impl FilesystemMT for HostFsFilesystem {
         })();
 
         match result {
-            Ok(data) => callback(Ok(&data)),
+            Ok(data) => callback(Ok(data.as_slice())),
             Err(errno) => callback(Err(errno)),
         }
     }
@@ -397,7 +397,7 @@ impl FilesystemMT for HostFsFilesystem {
             self.with_client_async(move |client| Box::pin(client.read_dir(relative)))?;
         entries.extend(remote_entries.into_iter().map(|entry| DirectoryEntry {
             name: entry.name.into(),
-            kind: entry_type_to_fuser(entry.entry_type),
+            kind: entry_type_to_file_type(entry.entry_type),
         }));
         Ok(entries)
     }
