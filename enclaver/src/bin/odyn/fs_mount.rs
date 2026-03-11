@@ -525,14 +525,15 @@ fn metadata_to_attr(metadata: &enclaver::fs_protocol::FsMetadata) -> FileAttr {
         _ => 0o644,
     };
 
-    let now = SystemTime::now();
+    let mtime = epoch_to_system_time(metadata.mtime_secs, metadata.mtime_nsecs);
+    let atime = epoch_to_system_time(metadata.atime_secs, metadata.atime_nsecs);
     FileAttr {
         size: metadata.len,
         blocks: metadata.len.div_ceil(512),
-        atime: now,
-        mtime: now,
-        ctime: now,
-        crtime: now,
+        atime,
+        mtime,
+        ctime: mtime,
+        crtime: mtime,
         kind,
         perm,
         nlink: if matches!(kind, FileType::Directory) {
@@ -545,6 +546,10 @@ fn metadata_to_attr(metadata: &enclaver::fs_protocol::FsMetadata) -> FileAttr {
         rdev: 0,
         flags: 0,
     }
+}
+
+fn epoch_to_system_time(secs: u64, nsecs: u32) -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(secs) + Duration::from_nanos(nsecs as u64)
 }
 
 fn ensure_fuse_device() -> AnyhowResult<()> {

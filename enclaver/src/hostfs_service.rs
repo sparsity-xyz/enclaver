@@ -519,10 +519,23 @@ fn normalize_relative_path(path: &str) -> std::result::Result<PathBuf, FsProxyEr
 }
 
 fn metadata_to_wire(metadata: &std::fs::Metadata) -> FsMetadata {
+    let (mtime_secs, mtime_nsecs) = system_time_to_epoch(metadata.modified().ok());
+    let (atime_secs, atime_nsecs) = system_time_to_epoch(metadata.accessed().ok());
     FsMetadata {
         entry_type: file_type_to_entry_type(&metadata.file_type()),
         len: metadata.len(),
         read_only: metadata.permissions().readonly(),
+        mtime_secs,
+        mtime_nsecs,
+        atime_secs,
+        atime_nsecs,
+    }
+}
+
+fn system_time_to_epoch(time: Option<std::time::SystemTime>) -> (u64, u32) {
+    match time.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) {
+        Some(d) => (d.as_secs(), d.subsec_nanos()),
+        None => (0, 0),
     }
 }
 

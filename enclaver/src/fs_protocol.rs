@@ -95,6 +95,18 @@ pub struct FsMetadata {
     pub entry_type: FsEntryType,
     pub len: u64,
     pub read_only: bool,
+    /// Modification time: seconds since UNIX epoch.
+    #[serde(default)]
+    pub mtime_secs: u64,
+    /// Modification time: nanosecond fraction.
+    #[serde(default)]
+    pub mtime_nsecs: u32,
+    /// Access time: seconds since UNIX epoch.
+    #[serde(default)]
+    pub atime_secs: u64,
+    /// Access time: nanosecond fraction.
+    #[serde(default)]
+    pub atime_nsecs: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
