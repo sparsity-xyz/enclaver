@@ -620,6 +620,8 @@ mod tests {
 
     #[test]
     fn proc_filesystems_rejects_missing_fuse_entries() {
-        assert!(!proc_filesystems_lists_fuse("nodev\tsysfs\nnodev\tproc\next4\n"));
+        assert!(!proc_filesystems_lists_fuse(
+            "nodev\tsysfs\nnodev\tproc\next4\n"
+        ));
     }
 }
