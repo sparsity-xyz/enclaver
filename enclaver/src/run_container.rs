@@ -208,26 +208,24 @@ impl Sleeve {
                 .docker
                 .remove_container(&container_id, None::<RemoveContainerOptions>)
                 .await
+                && first_error.is_none()
             {
-                if first_error.is_none() {
-                    first_error = Some(anyhow!("removing container: {}", err));
-                }
+                first_error = Some(anyhow!("removing container: {}", err));
             }
         }
 
-        if let Some(stream_task) = self.stream_task.take() {
-            if let Err(err) = stream_task.await {
-                if first_error.is_none() {
-                    first_error = Some(anyhow!("waiting for container log stream: {}", err));
-                }
-            }
+        if let Some(stream_task) = self.stream_task.take()
+            && let Err(err) = stream_task.await
+            && first_error.is_none()
+        {
+            first_error = Some(anyhow!("waiting for container log stream: {}", err));
         }
 
         for mount in self.hostfs_mounts.iter_mut().rev() {
-            if let Err(err) = mount.cleanup() {
-                if first_error.is_none() {
-                    first_error = Some(err);
-                }
+            if let Err(err) = mount.cleanup()
+                && first_error.is_none()
+            {
+                first_error = Some(err);
             }
         }
         self.hostfs_mounts.clear();

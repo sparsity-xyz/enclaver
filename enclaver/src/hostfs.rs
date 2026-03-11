@@ -59,15 +59,15 @@ impl PreparedLoopbackMount {
             }
         }
 
-        if self.runtime_dir.exists() {
-            if let Err(err) = fs::remove_dir_all(&self.runtime_dir) {
-                let err = anyhow!(
-                    "failed to remove hostfs runtime dir {}: {err}",
-                    self.runtime_dir.display()
-                );
-                if first_error.is_none() {
-                    first_error = Some(err);
-                }
+        if self.runtime_dir.exists()
+            && let Err(err) = fs::remove_dir_all(&self.runtime_dir)
+        {
+            let err = anyhow!(
+                "failed to remove hostfs runtime dir {}: {err}",
+                self.runtime_dir.display()
+            );
+            if first_error.is_none() {
+                first_error = Some(err);
             }
         }
 
