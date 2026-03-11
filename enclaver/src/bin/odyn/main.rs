@@ -131,7 +131,7 @@ async fn run(args: &CliArgs) -> Result<()> {
 
     match launch(args).await {
         Ok(exit_status) => app_status.exited(exit_status),
-        Err(err) => app_status.fatal(err.to_string()),
+        Err(err) => app_status.fatal(format_fatal_error(&err)),
     };
 
     app_status_task.await??;
@@ -158,5 +158,25 @@ async fn main() {
     if let Err(err) = run(&args).await {
         error!("Error: {err:#}");
         std::process::exit(1);
+    }
+}
+
+fn format_fatal_error(err: &anyhow::Error) -> String {
+    format!("{err:#}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_fatal_error;
+    use anyhow::{Context, anyhow};
+
+    #[test]
+    fn fatal_error_includes_full_context_chain() {
+        let err = anyhow!("inner hostfs error").context("failed to mount hostfs 'appdata'");
+
+        let formatted = format_fatal_error(&err);
+
+        assert!(formatted.contains("failed to mount hostfs 'appdata'"));
+        assert!(formatted.contains("inner hostfs error"));
     }
 }

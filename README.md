@@ -1,6 +1,6 @@
 <img src="docs/img/enclaver-logo-color.png" width="350" />
 
-Enclaver is an open source toolkit that simplifies packaging and running applications inside [AWS Nitro Enclaves](https://aws.amazon.com/ec2/nitro/nitro-enclaves/). It handles the complexity of enclave networking (ingress/egress proxies), cryptographic attestation, secure key management (KMS integration), and application lifecycle management — so you can focus on building your application.
+Enclaver is an open source toolkit that simplifies packaging and running applications inside [AWS Nitro Enclaves](https://aws.amazon.com/ec2/nitro/nitro-enclaves/). It handles the complexity of enclave networking (ingress/egress proxies), cryptographic attestation, secure key management (KMS integration), host-backed directory mounts, and application lifecycle management, so you can focus on building your application.
 
 This is the **Sparsity edition** of Enclaver, which adds support for Ethereum signing, P-384 ECDH encryption, S3 persistent storage, and an Internal API for enclave-based applications. See [enclaver-io/enclaver](https://github.com/enclaver-io/enclaver) for the original project.
 
@@ -15,6 +15,23 @@ Run this command to install the latest version of the `enclaver` CLI tool:
 ## Quick Start
 
 See [examples/hn-fetcher/readme.md](examples/hn-fetcher/readme.md) for a quick start example of building and running an enclave application with Enclaver.
+
+If your application needs a persistent directory inside the enclave, declare a mount in `enclaver.yaml` and bind it at runtime:
+
+```yaml
+storage:
+  mounts:
+    - name: appdata
+      mount_path: /mnt/appdata
+      required: true
+      size_mb: 10240
+```
+
+```bash
+sudo enclaver run -f enclaver.yaml --mount appdata=/var/lib/my-service/appdata
+```
+
+Enclaver will create or reuse `/var/lib/my-service/appdata/.enclaver-hostfs/disk.img` and mount it inside the enclave at `/mnt/appdata`. For the full design and security model, see [Host-Backed Persistent Mounts](docs/host_backed_mounts_design.md).
 
 ## Important: HTTP(S) Proxy Support for Enclave Apps
 
