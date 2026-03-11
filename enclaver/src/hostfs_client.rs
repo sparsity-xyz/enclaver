@@ -367,4 +367,25 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.errno(), nix::libc::EROFS);
     }
+
+    #[tokio::test]
+    async fn metadata_returns_nonzero_timestamps() {
+        let root = tempdir().unwrap();
+        let service = HostFsService::new("appdata", root.path(), false).unwrap();
+        let (client, server) = tokio::io::duplex(128 * 1024);
+        tokio::spawn(async move {
+            service.serve_conn(server).await.unwrap();
+        });
+
+        let mut client = HostFsClient::connect(client, "appdata").await.unwrap();
+        client
+            .write_file("ts.txt", 0, b"hello".to_vec(), true, true)
+            .await
+            .unwrap();
+
+        let meta = client.metadata("ts.txt").await.unwrap();
+        assert!(meta.mtime_secs > 0, "mtime should be non-zero");
+        assert!(meta.atime_secs > 0, "atime should be non-zero");
+        assert_eq!(meta.len, 5);
+    }
 }
