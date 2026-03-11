@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -56,7 +57,7 @@ impl HostFsMountService {
             });
         }
 
-        ensure_fuse_device()?;
+        ensure_fuse_available()?;
 
         let mut active_mounts = Vec::new();
         for (index, mount) in mounts.iter().enumerate() {
@@ -552,6 +553,31 @@ fn epoch_to_system_time(secs: u64, nsecs: u32) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(secs) + Duration::from_nanos(nsecs as u64)
 }
 
+fn ensure_fuse_available() -> AnyhowResult<()> {
+    ensure_fuse_device()?;
+
+    let filesystems = std::fs::read_to_string("/proc/filesystems")
+        .context("failed to read /proc/filesystems while verifying FUSE support")?;
+    if !proc_filesystems_lists_fuse(&filesystems) {
+        return Err(anyhow!(
+            "FUSE is not available inside the enclave kernel: /proc/filesystems does not list 'fuse'; rebuild the EIF with FUSE support enabled"
+        ));
+    }
+
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(FUSE_DEVICE_PATH)
+        .with_context(|| {
+            format!(
+                "failed to open {} while verifying FUSE support; the enclave kernel may not expose a working FUSE device",
+                FUSE_DEVICE_PATH
+            )
+        })?;
+
+    Ok(())
+}
+
 fn ensure_fuse_device() -> AnyhowResult<()> {
     let path = Path::new(FUSE_DEVICE_PATH);
     if path.exists() {
@@ -571,4 +597,31 @@ fn ensure_fuse_device() -> AnyhowResult<()> {
     .with_context(|| format!("failed to create {}", path.display()))?;
 
     Ok(())
+}
+
+fn proc_filesystems_lists_fuse(contents: &str) -> bool {
+    contents.lines().any(|line| {
+        matches!(
+            line.split_whitespace().last(),
+            Some("fuse") | Some("fuseblk")
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::proc_filesystems_lists_fuse;
+
+    #[test]
+    fn proc_filesystems_detects_fuse_entries() {
+        assert!(proc_filesystems_lists_fuse("nodev\tsysfs\nnodev\tfuse\n"));
+        assert!(proc_filesystems_lists_fuse("nodev\tproc\nfuseblk\n"));
+    }
+
+    #[test]
+    fn proc_filesystems_rejects_missing_fuse_entries() {
+        assert!(!proc_filesystems_lists_fuse(
+            "nodev\tsysfs\nnodev\tproc\next4\n"
+        ));
+    }
 }
