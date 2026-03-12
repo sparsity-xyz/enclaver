@@ -67,7 +67,7 @@ jobs:
         run: rustup component add clippy
 
       - name: Cache Cargo registry and git data
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index/
@@ -80,7 +80,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Cache Rust target directory
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: enclaver/target
           key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-clippy-${{ matrix.id }}-${{ hashFiles('enclaver/Cargo.lock') }}
@@ -125,7 +125,7 @@ jobs:
         run: rustup toolchain install $RUSTUP_TOOLCHAIN
 
       - name: Cache Cargo registry and git data
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index/
@@ -138,7 +138,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Cache Rust target directory
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: enclaver/target
           key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-${{ matrix.id }}-${{ hashFiles('enclaver/Cargo.lock') }}

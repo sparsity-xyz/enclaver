@@ -50,7 +50,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache release target directory
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: enclaver/target
           key: ${{ runner.os }}-release-target-${{ matrix.target }}-${{ hashFiles('enclaver/Cargo.lock') }}
