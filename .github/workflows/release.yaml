@@ -1,11 +1,9 @@
 name: Build Release
 
 on:
-  push:
-    branches:
-      - sparsity
-    tags:
-      - v*
+  release:
+    types:
+      - published
   workflow_dispatch:
     inputs:
       publish_images:
@@ -98,7 +96,7 @@ jobs:
 
   publish-images:
     if: >
-      (github.repository == 'sparsity-xyz/enclaver' && (github.ref == 'refs/heads/sparsity' || github.ref_type == 'tag'))
+      (github.repository == 'sparsity-xyz/enclaver' && github.event_name == 'release')
       || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_images == 'true')
     needs: build-release-binaries
     runs-on: ubuntu-latest
@@ -203,13 +201,16 @@ jobs:
 
   upload-release-artifact:
     if: >
-      (github.repository == 'sparsity-xyz/enclaver' && github.ref_type == 'tag')
+      (github.repository == 'sparsity-xyz/enclaver' && github.event_name == 'release')
       || (github.event_name == 'workflow_dispatch' && github.event.inputs.upload_artifacts == 'true')
     needs: build-release-binaries
     runs-on: ubuntu-latest
 
     permissions:
       contents: 'write'
+
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
 
     strategy:
       matrix:
@@ -229,7 +230,7 @@ jobs:
           sleep ${{ matrix.delay }}
           echo Proceeding
 
-          release_dir="${{ matrix.release_name }}-${{ github.ref_name }}"
+          release_dir="${{ matrix.release_name }}-${RELEASE_TAG}"
 
           mkdir ${release_dir}
           mv ${{ matrix.target }}/enclaver ${release_dir}/enclaver
@@ -240,8 +241,7 @@ jobs:
       - name: Upload Artifact to GH Release
         uses: softprops/action-gh-release@v1
         with:
-          draft: true
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
-            ${{ matrix.release_name }}-${{ github.ref_name }}.tar.gz
-            ${{ matrix.release_name }}-${{ github.ref_name }}.tar.gz.sha256
+            ${{ matrix.release_name }}-${{ env.RELEASE_TAG }}.tar.gz
+            ${{ matrix.release_name }}-${{ env.RELEASE_TAG }}.tar.gz.sha256
