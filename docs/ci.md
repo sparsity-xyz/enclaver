@@ -1,9 +1,10 @@
 # CI and Release Workflows
 
-This repository has two GitHub Actions workflows:
+This repository has three GitHub Actions workflows:
 
 - `.github/workflows/ci.yaml`
 - `.github/workflows/release.yaml`
+- `.github/workflows/nitro-cli.yaml`
 
 This document describes the workflows as they exist in the repository today.
 
@@ -118,7 +119,7 @@ Jobs:
    - renames target directories to Docker architecture names:
      - `x86_64-unknown-linux-musl` -> `amd64`
      - `aarch64-unknown-linux-musl` -> `arm64`
-   - publishes only these images:
+   - publishes only these runtime images:
      - `public.ecr.aws/d4t4u8d2/sparsity-ai/odyn`
      - `public.ecr.aws/d4t4u8d2/sparsity-ai/sleeve`
    - authenticates to AWS via OIDC and pushes image provenance
@@ -132,8 +133,9 @@ Jobs:
 
 Notably:
 
-- the release workflow does not publish a `nitro-cli` image
-- it does not upload `odyn` or `enclaver-run` as standalone GitHub Release tarballs
+- `nitro-cli.yaml` is the manual workflow for publishing just the Nitro CLI image
+- only `nitro-cli.yaml` validates that the nitro-cli image ships a FUSE-enabled enclave kernel and can complete a smoke `build-enclave` before push
+- the release workflow still does not upload `odyn` or `enclaver-run` as standalone GitHub Release tarballs
 
 ## Local release reproduction
 
@@ -164,6 +166,12 @@ docker buildx build \
   -t sleeve:local .
 ```
 
+Build and validate the Nitro CLI image locally:
+
+```bash
+./scripts/build-and-publish-nitro-cli.sh --tag latest
+```
+
 ## AWS prerequisites for `publish-images`
 
 The repository includes AWS infrastructure definitions in `aws/cloudformation/infrastructure.yml`.
@@ -171,11 +179,11 @@ To run the official publish flow, you need:
 
 - an OIDC trust relationship for GitHub Actions
 - the IAM role referenced by `release.yaml`
-- public ECR repositories for `sparsity-ai/odyn` and `sparsity-ai/sleeve`
+- public ECR repositories for `sparsity-ai/nitro-cli`, `sparsity-ai/odyn`, and `sparsity-ai/sleeve`
 
 ## References
 
-- workflow definitions: `.github/workflows/ci.yaml`, `.github/workflows/release.yaml`
+- workflow definitions: `.github/workflows/ci.yaml`, `.github/workflows/release.yaml`, `.github/workflows/nitro-cli.yaml`
 - custom build action: `./.github/actions/cargo-zigbuild`
 - local helper: `scripts/build-docker-images.sh`
 - AWS infra: `aws/cloudformation/infrastructure.yml`

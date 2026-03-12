@@ -2,7 +2,7 @@
 
 Enclaver uses three important images in its build and runtime flow. The defaults live in `enclaver/src/build.rs`:
 
-- Nitro CLI: `public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest`
+- Nitro CLI: `public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest`
 - Odyn: `public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest`
 - Sleeve: `public.ecr.aws/d4t4u8d2/sparsity-ai/sleeve:latest`
 
@@ -23,7 +23,7 @@ Relevant files:
 - `dockerfiles/nitro-cli.dockerfile`
 - `scripts/build-and-publish-nitro-cli.sh`
 
-The release workflow does not publish a `nitro-cli` image from this repository. Enclaver consumes the default public image unless you override the build sources or rebuild a compatible replacement.
+The repository now publishes a self-hosted `nitro-cli` image through the manual `nitro-cli.yaml` workflow, and Enclaver consumes that image by default. The nitro-cli build replaces the stock enclave blobs with a FUSE-enabled kernel and matching bootstrap artifacts.
 
 ### Odyn image
 
@@ -83,7 +83,7 @@ Runtime:
 ## Local inspection commands
 
 ```bash
-docker pull public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest
+docker pull public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest
 docker pull public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest
 docker pull public.ecr.aws/d4t4u8d2/sparsity-ai/sleeve:latest
 
@@ -91,7 +91,7 @@ docker image inspect public.ecr.aws/d4t4u8d2/sparsity-ai/sleeve:latest
 docker history public.ecr.aws/d4t4u8d2/sparsity-ai/sleeve:latest
 
 docker run --rm --entrypoint ls \
-  public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest \
+  public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest \
   -la /usr/bin /lib64
 ```
 

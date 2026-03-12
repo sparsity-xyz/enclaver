@@ -7,8 +7,10 @@
 # This script:
 #   1. Authenticates Docker to AWS Public ECR
 #   2. Creates the ECR repository if it doesn't exist
-#   3. Builds the nitro-cli image for linux/amd64 and linux/arm64
-#   4. Pushes the multi-arch image to ECR
+#   3. Builds a local validation image for the current architecture
+#   4. Verifies the image ships a FUSE-enabled enclave kernel
+#   5. Builds the nitro-cli image for linux/amd64 and linux/arm64
+#   6. Pushes the multi-arch image to ECR
 #
 # Prerequisites:
 #   - AWS CLI configured with appropriate credentials
@@ -91,6 +93,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 FULL_IMAGE_URI="${REGISTRY}/${REPO_NAME}"
+VALIDATION_IMAGE_URI="${FULL_IMAGE_URI}:validate-${TAG}"
+
+local_arch=$(uname -m)
+case "${local_arch}" in
+    x86_64)
+        validation_platform="linux/amd64"
+        ;;
+    aarch64)
+        validation_platform="linux/arm64"
+        ;;
+    *)
+        log_error "Unsupported architecture for validation: ${local_arch}"
+        exit 1
+        ;;
+esac
 
 log_info "Building nitro-cli image..."
 log_info "  Dockerfile: ${DOCKERFILE_PATH}"
@@ -142,7 +159,19 @@ else
     docker buildx use "${BUILDER_NAME}"
 fi
 
-# Step 4: Build and push multi-arch image
+# Step 4: Build and validate the current-platform image locally
+log_info "Building local validation image for ${validation_platform}..."
+docker buildx build \
+    --platform "${validation_platform}" \
+    --file "${DOCKERFILE_PATH}" \
+    --tag "${VALIDATION_IMAGE_URI}" \
+    --load \
+    .
+
+log_info "Validating nitro-cli image contents..."
+"${REPO_ROOT}/scripts/validate-nitro-cli-image.sh" "${VALIDATION_IMAGE_URI}"
+
+# Step 5: Build and push multi-arch image
 log_info "Building and pushing multi-arch image (amd64, arm64)..."
 docker buildx build \
     --platform linux/amd64,linux/arm64 \
@@ -151,7 +180,7 @@ docker buildx build \
     --push \
     .
 
-# Step 5: Verify the push
+# Step 6: Verify the push
 log_info "Verifying image was pushed..."
 if docker buildx imagetools inspect "${FULL_IMAGE_URI}:${TAG}" &> /dev/null; then
     log_info "✅ Successfully pushed: ${FULL_IMAGE_URI}:${TAG}"
@@ -167,11 +196,5 @@ echo "=========================================="
 echo ""
 echo "Image URI: ${FULL_IMAGE_URI}:${TAG}"
 echo ""
-echo "To use this image in Enclaver, update enclaver/src/build.rs:"
-echo ""
-echo "  const NITRO_CLI_IMAGE: &str = \"${FULL_IMAGE_URI}:${TAG}\";"
-echo ""
-echo "Or update the Dockerfiles to use it:"
-echo ""
-echo "  FROM ${FULL_IMAGE_URI}:${TAG} AS nitro_cli"
+echo "Validated local image: ${VALIDATION_IMAGE_URI}"
 echo ""

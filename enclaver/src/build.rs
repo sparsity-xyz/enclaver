@@ -20,7 +20,7 @@ use uuid::Uuid;
 const ENCLAVE_OVERLAY_CHOWN: &str = "0:0";
 const RELEASE_OVERLAY_CHOWN: &str = "0:0";
 
-const NITRO_CLI_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest";
+const NITRO_CLI_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest";
 const ODYN_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest";
 const ODYN_IMAGE_BINARY_PATH: &str = "/usr/local/bin/odyn";
 const SLEEVE_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/sleeve:latest";
@@ -433,4 +433,122 @@ pub struct ResolvedSources {
 
     #[serde(rename = "Sleeve")]
     sleeve: ImageRef,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NITRO_CLI_IMAGE;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn nitro_cli_image_repo() -> String {
+        NITRO_CLI_IMAGE
+            .strip_suffix(":latest")
+            .expect("nitro-cli default image should use the latest tag")
+            .to_string()
+    }
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("enclaver crate should live under repository root")
+            .to_path_buf()
+    }
+
+    #[test]
+    fn default_nitro_cli_image_uses_self_hosted_public_ecr() {
+        assert_eq!(
+            NITRO_CLI_IMAGE,
+            "public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest"
+        );
+        assert_eq!(
+            nitro_cli_image_repo(),
+            "public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli"
+        );
+    }
+
+    #[test]
+    fn sleeve_dockerfiles_default_to_same_nitro_cli_image() {
+        for rel_path in [
+            "dockerfiles/sleeve-dev.dockerfile",
+            "dockerfiles/sleeve-release.dockerfile",
+        ] {
+            let path = repo_root().join(rel_path);
+            let contents =
+                fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+            assert!(
+                contents.contains(&format!("ARG NITRO_CLI_IMAGE={NITRO_CLI_IMAGE}")),
+                "{rel_path} should default to {NITRO_CLI_IMAGE}"
+            );
+            assert!(
+                contents.contains("FROM ${NITRO_CLI_IMAGE} AS nitro_cli"),
+                "{rel_path} should source nitro-cli from the overridable build arg"
+            );
+        }
+    }
+
+    #[test]
+    fn nitro_cli_dockerfile_rebuilds_fuse_enabled_blobs() {
+        let path = repo_root().join("dockerfiles/nitro-cli.dockerfile");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            contents.contains("aws-nitro-enclaves-sdk-bootstrap"),
+            "nitro-cli image should rebuild the official Nitro Enclaves blobs from source"
+        );
+        assert!(
+            contents.contains("CONFIG_FUSE_FS"),
+            "nitro-cli image should validate that the enclave kernel enables FUSE"
+        );
+    }
+
+    #[test]
+    fn nitro_cli_validation_script_checks_fuse_and_smoke_builds_eif() {
+        let path = repo_root().join("scripts/validate-nitro-cli-image.sh");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            contents.contains("CONFIG_FUSE_FS"),
+            "validation script should verify that the nitro-cli kernel enables FUSE"
+        );
+        assert!(
+            contents.contains("build-enclave"),
+            "validation script should run a smoke EIF build"
+        );
+    }
+
+    #[test]
+    fn nitro_cli_workflow_publishes_and_validates_self_hosted_image() {
+        let path = repo_root().join(".github/workflows/nitro-cli.yaml");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            contents.contains(&format!("NITRO_CLI_IMAGE: {}", nitro_cli_image_repo())),
+            "nitro-cli workflow should publish the self-hosted nitro-cli repository"
+        );
+        assert!(
+            contents.contains("scripts/validate-nitro-cli-image.sh"),
+            "nitro-cli workflow should validate the nitro-cli image before publishing it"
+        );
+    }
+
+    #[test]
+    fn release_workflow_does_not_publish_nitro_cli_image() {
+        let path = repo_root().join(".github/workflows/release.yaml");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            !contents.contains("Build Nitro CLI Image"),
+            "release workflow should not publish nitro-cli automatically"
+        );
+        assert!(
+            !contents.contains("scripts/validate-nitro-cli-image.sh"),
+            "release workflow should not run the manual nitro-cli validation/publish flow"
+        );
+    }
 }

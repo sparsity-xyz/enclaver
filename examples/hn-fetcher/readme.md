@@ -91,8 +91,8 @@ $ enclaver build -f enclaver.yaml
     },
     "NitroCLI": {
       "ID": "sha256:14dd347aec286f67025c824762876b0226d0a890033bcd4ac5076c06fe90eee8",
-      "Name": "public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest",
-      "RepoDigest": "public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli@sha256:83d1bf977d62d68fe49763c94fb0d1ab23dc59a5844e9f5b86a07ccf7618ced9"
+      "Name": "public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest",
+      "RepoDigest": "public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli@sha256:<example-digest>"
     },
     "Sleeve": {
       "ID": "sha256:1545dc67f60a477e737b1cf2c563717f5c27ffb356a906fa6bf77936f34bf5b2",

@@ -4,7 +4,7 @@ This document covers the image-building paths that exist in the repository today
 
 - local developer images via `scripts/build-docker-images.sh`
 - release-style images via `dockerfiles/*-release.dockerfile`
-- optional Nitro CLI image rebuilds
+- Nitro CLI image rebuilds with a FUSE-enabled enclave kernel
 
 ## Prerequisites
 
@@ -121,7 +121,7 @@ How those Dockerfiles work:
 
 ## Nitro CLI image
 
-This repository includes `dockerfiles/nitro-cli.dockerfile` and `scripts/build-and-publish-nitro-cli.sh`.
+This repository includes `dockerfiles/nitro-cli.dockerfile`, `scripts/build-and-publish-nitro-cli.sh`, and `scripts/validate-nitro-cli-image.sh`.
 
 Build it locally:
 
@@ -135,7 +135,7 @@ Or use the helper script:
 ./scripts/build-and-publish-nitro-cli.sh --tag latest
 ```
 
-Enclaver does not automatically switch to that rebuilt image. If you want to consume it by default, update the Nitro CLI source used by your build flow.
+The helper script now builds a local validation image, checks that the rebuilt enclave kernel exposes `CONFIG_FUSE_FS`, performs a smoke `nitro-cli build-enclave`, and only then pushes the multi-arch image. Enclaver uses `public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest` by default.
 
 ## Troubleshooting
 
