@@ -433,7 +433,6 @@ mod tests {
             defaults: None,
             api: None,
             aux_api: None,
-            vsock_ports: None,
             storage: Some(Storage {
                 s3: None,
                 mounts: Some(vec![HostFsMountConfig {
@@ -487,7 +486,6 @@ mod tests {
             defaults: None,
             api: None,
             aux_api: None,
-            vsock_ports: None,
             storage: Some(Storage {
                 s3: None,
                 mounts: None,

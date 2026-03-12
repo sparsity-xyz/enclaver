@@ -61,9 +61,7 @@ impl RuntimeHostVsockPorts {
     }
 }
 
-pub fn allocate_managed_enclave_cid(used_cids: impl IntoIterator<Item = u32>) -> Result<u32> {
-    let used = used_cids.into_iter().collect::<HashSet<_>>();
-
+pub fn allocate_managed_enclave_cid(used: &HashSet<u32>) -> Result<u32> {
     for cid in ENCLAVER_MANAGED_CID_START..=ENCLAVER_MANAGED_CID_END {
         if !used.contains(&cid) {
             return Ok(cid);
@@ -85,6 +83,7 @@ pub fn validate_enclave_cid(enclave_cid: u32) -> Result<()> {
         );
     }
 
+    // Verify the CID maps to a valid host-side VSOCK block and catch overflow.
     let _ = runtime_block_base(enclave_cid)?;
     Ok(())
 }
@@ -108,7 +107,8 @@ mod tests {
 
     #[test]
     fn allocate_managed_enclave_cid_skips_used_values() {
-        let cid = allocate_managed_enclave_cid([ENCLAVER_MANAGED_CID_START, 99]).unwrap();
+        let used = HashSet::from([ENCLAVER_MANAGED_CID_START, 99]);
+        let cid = allocate_managed_enclave_cid(&used).unwrap();
         assert_eq!(cid, ENCLAVER_MANAGED_CID_START + 1);
     }
 
@@ -138,5 +138,18 @@ mod tests {
     fn validate_enclave_cid_rejects_reserved_values() {
         let err = validate_enclave_cid(3).unwrap_err().to_string();
         assert!(err.contains("reserved"));
+    }
+
+    #[test]
+    fn runtime_ports_reject_overflowing_cids() {
+        let err = RuntimeHostVsockPorts::for_cid(u32::MAX)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("overflow"));
+    }
+
+    #[test]
+    fn runtime_ports_accept_upper_managed_cid() {
+        assert!(RuntimeHostVsockPorts::for_cid(ENCLAVER_MANAGED_CID_END).is_ok());
     }
 }

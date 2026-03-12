@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use enclaver::constants::{HTTP_EGRESS_PROXY_PORT, MANIFEST_FILE_NAME};
 use enclaver::manifest::{HeliosRpcKind, Manifest};
 
-pub const LOOPBACK_NO_PROXY: &str = "localhost,127.0.0.1";
+const LOOPBACK_NO_PROXY: &str = "localhost,127.0.0.1";
 
 #[derive(Clone, Debug)]
 pub struct HeliosRuntimeConfig {
@@ -141,6 +141,7 @@ impl Configuration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use enclaver::constants::KMS_REGISTRY_HELIOS_PORT;
     use enclaver::manifest::{Api, AuxApi, ClockSync, Egress, HeliosRpc, HeliosRpcChain, Sources};
 
     fn base_config() -> Configuration {
@@ -161,7 +162,6 @@ mod tests {
                 defaults: None,
                 api: Some(Api { listen_port: 9000 }),
                 aux_api: None,
-                vsock_ports: None,
                 storage: None,
                 kms_integration: None,
                 helios_rpc: None,
@@ -234,7 +234,7 @@ mod tests {
                     execution_rpc: "https://sepolia.base.example".to_string(),
                     consensus_rpc: None,
                     checkpoint: None,
-                    local_rpc_port: 18545,
+                    local_rpc_port: KMS_REGISTRY_HELIOS_PORT,
                 },
                 HeliosRpcChain {
                     name: "ethereum-mainnet".to_string(),
@@ -309,6 +309,12 @@ mod tests {
             "http://127.0.0.1:8123/".to_string()
         )));
         assert!(vars.contains(&("NO_PROXY".to_string(), LOOPBACK_NO_PROXY.to_string())));
+    }
+
+    #[test]
+    fn egress_proxy_env_vars_is_empty_when_egress_is_disabled() {
+        let cfg = base_config();
+        assert!(cfg.egress_proxy_env_vars().is_empty());
     }
 
     #[test]

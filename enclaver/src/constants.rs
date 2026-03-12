@@ -31,5 +31,9 @@ pub const HOST_RUNTIME_HOSTFS_CAPACITY: u32 =
 // specified in the manifest.
 pub const HTTP_EGRESS_PROXY_PORT: u16 = 10000;
 
+// Registry-backed KMS discovery currently requires a Helios endpoint on this
+// enclave-local port.
+pub const KMS_REGISTRY_HELIOS_PORT: u16 = 18545;
+
 // The hostname to refer to the host side from inside the enclave.
 pub const OUTSIDE_HOST: &str = "host";

@@ -22,6 +22,7 @@ use crate::nitro_cli::{EnclaveInfo, NitroCLI, RunEnclaveArgs};
 use crate::proxy::egress_http::HostHttpProxy;
 use crate::proxy::fs_host::HostFsProxy;
 use crate::proxy::ingress::HostProxy;
+use std::collections::HashSet;
 
 const LOG_VSOCK_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const STATUS_VSOCK_RETRY_INTERVAL: Duration = Duration::from_millis(250);
@@ -32,6 +33,7 @@ const CLOCK_SYNC_MAX_REQUEST_LEN: usize = 16;
 const DEFAULT_CPU_COUNT: i32 = 2;
 const DEFAULT_MEMORY_MB: i32 = 4096;
 const HOST_RUNTIME_BIND_RETRY_LIMIT: usize = 16;
+const MANAGED_CID_CONFLICT_RETRY_LIMIT: usize = 8;
 
 pub struct EnclaveOpts {
     pub eif_path: Option<PathBuf>,
@@ -132,33 +134,51 @@ impl Enclave {
             return Err(anyhow!("Enclave already started"));
         }
 
-        let runtime_vsock = self.prepare_host_runtime().await?;
-        self.runtime_vsock = Some(runtime_vsock.clone());
+        let mut conflict_rejected_cids = HashSet::new();
+        let enclave_info = loop {
+            ensure_managed_cid_retry_budget(&conflict_rejected_cids)?;
 
-        info!(
-            "starting enclave with managed CID={} host_runtime_ports{{egress={}, clock_sync={}}}",
-            runtime_vsock.enclave_cid, runtime_vsock.egress_port, runtime_vsock.clock_sync_port
-        );
-        let enclave_info = match self
-            .cli
-            .run_enclave(RunEnclaveArgs {
-                cpu_count: self.cpu_count,
-                memory_mb: self.memory_mb,
-                eif_path: self.eif_path.clone(),
-                cid: Some(runtime_vsock.enclave_cid),
-                debug_mode: self.debug_mode,
-            })
-            .await
-        {
-            Ok(info) => info,
-            Err(err) => {
-                if let Err(cleanup_err) = self.cleanup_running_state().await {
-                    error!("error cleaning up after failed enclave start: {cleanup_err}");
+            let runtime_vsock = self.prepare_host_runtime(&conflict_rejected_cids).await?;
+            self.runtime_vsock = Some(runtime_vsock.clone());
+
+            info!(
+                "starting enclave with managed CID={} host_runtime_ports{{egress={}, clock_sync={}}}",
+                runtime_vsock.enclave_cid, runtime_vsock.egress_port, runtime_vsock.clock_sync_port
+            );
+            match self
+                .cli
+                .run_enclave(RunEnclaveArgs {
+                    cpu_count: self.cpu_count,
+                    memory_mb: self.memory_mb,
+                    eif_path: self.eif_path.clone(),
+                    cid: Some(runtime_vsock.enclave_cid),
+                    debug_mode: self.debug_mode,
+                })
+                .await
+            {
+                Ok(info) => break info,
+                Err(err) if is_managed_cid_conflict_error(&err) => {
+                    warn!(
+                        "managed CID {} was claimed before nitro-cli run-enclave completed: {err:#}; retrying with a different CID",
+                        runtime_vsock.enclave_cid
+                    );
+                    conflict_rejected_cids.insert(runtime_vsock.enclave_cid);
+                    if let Err(cleanup_err) = self.cleanup_running_state().await {
+                        return Err(cleanup_err.context(format!(
+                            "failed to clean up after managed CID {} start collision",
+                            runtime_vsock.enclave_cid
+                        )));
+                    }
                 }
-                return Err(err.context(format!(
-                    "failed to start enclave with managed CID {}",
-                    runtime_vsock.enclave_cid
-                )));
+                Err(err) => {
+                    if let Err(cleanup_err) = self.cleanup_running_state().await {
+                        error!("error cleaning up after failed enclave start: {cleanup_err}");
+                    }
+                    return Err(err.context(format!(
+                        "failed to start enclave with managed CID {}",
+                        runtime_vsock.enclave_cid
+                    )));
+                }
             }
         };
 
@@ -199,15 +219,21 @@ impl Enclave {
                 info!("enclave exited due to fatal error: {error}")
             }
             Ok(EnclaveExitStatus::Cancelled) => (),
-            Err(ref err) => error!("error waing for enclave exit: {err}"),
+            Err(ref err) => error!("error waiting for enclave exit: {err}"),
         };
 
         exit_res
     }
 
-    async fn prepare_host_runtime(&mut self) -> Result<RuntimeHostVsockPorts> {
+    async fn prepare_host_runtime(
+        &mut self,
+        conflict_rejected_cids: &HashSet<u32>,
+    ) -> Result<RuntimeHostVsockPorts> {
+        let mut bind_unavailable_cids = conflict_rejected_cids.clone();
         for attempt in 1..=HOST_RUNTIME_BIND_RETRY_LIMIT {
-            let runtime_vsock = self.select_runtime_vsock_ports().await?;
+            let runtime_vsock = self
+                .select_runtime_vsock_ports(&bind_unavailable_cids)
+                .await?;
 
             debug!(
                 "attempting host runtime reservation with managed CID={} egress_port={} clock_sync_port={} (attempt {}/{})",
@@ -231,8 +257,9 @@ impl Enclave {
             match start_result {
                 Ok(()) => return Ok(runtime_vsock),
                 Err(err) if is_addr_in_use_error(&err) => {
+                    bind_unavailable_cids.insert(runtime_vsock.enclave_cid);
                     warn!(
-                        "managed CID {} collided on a derived host runtime VSOCK port (attempt {}/{}): {err:#}; retrying with a new CID",
+                        "managed CID {} collided on a derived host runtime VSOCK port (attempt {}/{}): {err:#}; retrying with a different managed CID",
                         runtime_vsock.enclave_cid, attempt, HOST_RUNTIME_BIND_RETRY_LIMIT
                     );
                     self.abort_tasks().await;
@@ -251,14 +278,19 @@ impl Enclave {
         ))
     }
 
-    async fn select_runtime_vsock_ports(&self) -> Result<RuntimeHostVsockPorts> {
-        let used_cids = self
+    async fn select_runtime_vsock_ports(
+        &self,
+        excluded_cids: &HashSet<u32>,
+    ) -> Result<RuntimeHostVsockPorts> {
+        let mut used_cids = self
             .cli
             .describe_enclaves()
             .await?
             .into_iter()
-            .map(|enclave| enclave.cid);
-        let cid = allocate_managed_enclave_cid(used_cids)?;
+            .map(|enclave| enclave.cid)
+            .collect::<HashSet<_>>();
+        used_cids.extend(excluded_cids.iter().copied());
+        let cid = allocate_managed_enclave_cid(&used_cids)?;
         RuntimeHostVsockPorts::for_cid(cid)
     }
 
@@ -385,15 +417,19 @@ impl Enclave {
             runtime_vsock.clock_sync_port, runtime_vsock.enclave_cid
         );
 
-        let listener = crate::vsock::serve(runtime_vsock.clock_sync_port).map_err(|err| {
-            annotate_host_vsock_bind_error(
-                err,
-                format!(
-                    "clock sync host time server vsock port {} for managed CID {}",
-                    runtime_vsock.clock_sync_port, runtime_vsock.enclave_cid
-                ),
-            )
-        })?;
+        let binding = format!(
+            "clock sync host time server vsock port {} for managed CID {}",
+            runtime_vsock.clock_sync_port, runtime_vsock.enclave_cid
+        );
+        let listener = match crate::vsock::serve(runtime_vsock.clock_sync_port) {
+            Ok(listener) => listener,
+            Err(err) => {
+                return handle_clock_sync_bind_error(
+                    annotate_host_vsock_bind_error(err, binding),
+                    runtime_vsock,
+                );
+            }
+        };
         self.tasks
             .push(utils::spawn!("clock sync time server", async move {
                 tokio::pin!(listener);
@@ -553,6 +589,41 @@ fn is_addr_in_use_error(err: &anyhow::Error) -> bool {
     })
 }
 
+fn is_managed_cid_conflict_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<crate::nitro_cli::NitroCliCommandFailure>()
+            .is_some_and(|failure| failure.indicates_cid_conflict())
+    })
+}
+
+fn handle_clock_sync_bind_error(
+    err: anyhow::Error,
+    runtime_vsock: &RuntimeHostVsockPorts,
+) -> Result<()> {
+    if is_addr_in_use_error(&err) {
+        warn!(
+            "failed to bind host-side clock sync time server on vsock port {} for managed CID {}: {err:#}; continuing without a dedicated clock sync listener",
+            runtime_vsock.clock_sync_port, runtime_vsock.enclave_cid
+        );
+        return Ok(());
+    }
+
+    Err(err)
+}
+
+fn ensure_managed_cid_retry_budget(conflict_rejected_cids: &HashSet<u32>) -> Result<()> {
+    if conflict_rejected_cids.len() >= MANAGED_CID_CONFLICT_RETRY_LIMIT {
+        anyhow::bail!(
+            "failed to start enclave after {} managed CID conflict retries; exhausted CIDs: {:?}",
+            MANAGED_CID_CONFLICT_RETRY_LIMIT,
+            conflict_rejected_cids
+        );
+    }
+
+    Ok(())
+}
+
 /// Handle a single clock sync time request from the enclave.
 /// Reads a request line, responds with host receive/transmit timestamps as JSON.
 #[cfg(feature = "vsock")]
@@ -592,12 +663,62 @@ async fn handle_time_request(stream: tokio_vsock::VsockStream) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nitro_cli::NitroCliCommandFailure;
+    use crate::runtime_vsock::RuntimeHostVsockPorts;
+    use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn managed_cid_conflict_detection_requires_nitro_cli_stderr_match() {
+        let err = anyhow::Error::new(NitroCliCommandFailure::new(
+            "run-enclave --enclave-cid 19".to_string(),
+            std::process::ExitStatus::from_raw(1 << 8),
+            "Enclave CID 19 is already in use by another enclave".to_string(),
+        ));
+        assert!(is_managed_cid_conflict_error(&err));
+
+        let other = anyhow::Error::msg("some unrelated startup failure");
+        assert!(!is_managed_cid_conflict_error(&other));
+    }
+
+    #[test]
+    fn clock_sync_addr_in_use_degrades_gracefully() {
+        let runtime_vsock = RuntimeHostVsockPorts::for_cid(16).unwrap();
+        let err = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "port already in use",
+        ));
+        assert!(handle_clock_sync_bind_error(err, &runtime_vsock).is_ok());
+    }
+
+    #[test]
+    fn clock_sync_non_addr_in_use_still_errors() {
+        let runtime_vsock = RuntimeHostVsockPorts::for_cid(16).unwrap();
+        let err = anyhow::Error::msg("some other failure");
+        assert!(handle_clock_sync_bind_error(err, &runtime_vsock).is_err());
+    }
+
+    #[test]
+    fn managed_cid_retry_budget_is_bounded() {
+        let budget = (0..MANAGED_CID_CONFLICT_RETRY_LIMIT as u32).collect::<HashSet<_>>();
+        let err = ensure_managed_cid_retry_budget(&budget)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("managed CID conflict retries"));
+    }
+}
+
 fn current_unix_timestamp() -> Result<(i64, u32)> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| anyhow!("system time error: {e}"))?;
 
-    Ok((now.as_secs() as i64, now.subsec_nanos()))
+    let secs = i64::try_from(now.as_secs())
+        .map_err(|_| anyhow!("system time seconds do not fit into i64"))?;
+
+    Ok((secs, now.subsec_nanos()))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

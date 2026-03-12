@@ -4,7 +4,9 @@ use anyhow::{Result, anyhow};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 use std::process::Stdio;
 use tokio::process::{ChildStdout, Command};
 
@@ -24,6 +26,11 @@ impl NitroCLI {
         T: serde::de::DeserializeOwned,
     {
         let cmd_args = args.to_args()?;
+        let rendered_cmd = cmd_args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
 
         debug!("executing nitro-cli with args: {:#?}", cmd_args);
 
@@ -54,7 +61,7 @@ impl NitroCLI {
                 error!("{path}:\n{contents}");
             }
 
-            Err(anyhow!("failed to run enclave"))
+            Err(NitroCliCommandFailure::new(rendered_cmd, output.status, stderr).into())
         }
     }
 
@@ -211,6 +218,61 @@ impl NitroCLIArgs for DescribeEnclavesArgs {
     }
 }
 
+#[derive(Debug)]
+pub struct NitroCliCommandFailure {
+    command: String,
+    status: ExitStatus,
+    stderr: String,
+}
+
+impl NitroCliCommandFailure {
+    pub(crate) fn new(command: String, status: ExitStatus, stderr: String) -> Self {
+        Self {
+            command,
+            status,
+            stderr,
+        }
+    }
+
+    pub fn indicates_cid_conflict(&self) -> bool {
+        stderr_mentions_cid_conflict(&self.stderr)
+    }
+}
+
+impl fmt::Display for NitroCliCommandFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let stderr = self.stderr.trim();
+        if stderr.is_empty() {
+            write!(
+                f,
+                "nitro-cli command '{}' failed ({})",
+                self.command, self.status
+            )
+        } else {
+            write!(
+                f,
+                "nitro-cli command '{}' failed ({}): {}",
+                self.command, self.status, stderr
+            )
+        }
+    }
+}
+
+impl std::error::Error for NitroCliCommandFailure {}
+
+fn stderr_mentions_cid_conflict(stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    stderr.contains("cid")
+        && [
+            "already in use",
+            "already used",
+            "used by another enclave",
+            "in use by another enclave",
+        ]
+        .iter()
+        .any(|needle| stderr.contains(needle))
+}
+
 pub struct TerminateEnclaveArgs {
     pub enclave_id: String,
 }
@@ -309,5 +371,18 @@ mod tests {
             ),
             Some(KnownIssue::ImageTooLargeForRAM)
         );
+    }
+
+    #[test]
+    fn test_detect_cid_conflict_stderr() {
+        assert!(stderr_mentions_cid_conflict(
+            "Enclave CID 19 is already in use by another enclave"
+        ));
+        assert!(stderr_mentions_cid_conflict(
+            "allocator error: CID 22 already used"
+        ));
+        assert!(!stderr_mentions_cid_conflict(
+            "failed to allocate memory for enclave"
+        ));
     }
 }

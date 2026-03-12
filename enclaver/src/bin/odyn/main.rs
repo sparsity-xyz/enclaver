@@ -19,7 +19,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use enclaver::constants::{APP_LOG_PORT, STATUS_PORT};
+use enclaver::constants::{APP_LOG_PORT, KMS_REGISTRY_HELIOS_PORT, STATUS_PORT};
 use enclaver::nsm::Nsm;
 use enclaver::runtime_vsock::RuntimeHostVsockPorts;
 
@@ -32,8 +32,6 @@ use egress::EgressService;
 use fs_mount::HostFsMountService;
 use helios_rpc::HeliosRpcService;
 use ingress::IngressService;
-
-const KMS_AUTH_CHAIN_HELIOS_PORT: u16 = 18545;
 
 #[derive(Parser)]
 struct CliArgs {
@@ -221,16 +219,16 @@ async fn launch(args: &CliArgs) -> Result<launcher::ExitStatus> {
             .unwrap_or(false)
         {
             info!("Waiting for Helios auth-chain RPC readiness required by Nova KMS");
-            if !services
-                .helios_rpc
-                .as_mut()
-                .expect("helios service just started")
-                .wait_ready_for_port(KMS_AUTH_CHAIN_HELIOS_PORT)
+            let helios_rpc = services.helios_rpc.as_mut().ok_or_else(|| {
+                anyhow!("invariant violated: Helios service missing after successful start")
+            })?;
+            if !helios_rpc
+                .wait_ready_for_port(KMS_REGISTRY_HELIOS_PORT)
                 .await
             {
                 return Err(anyhow!(
                     "Helios auth-chain RPC failed to become ready on local port {}",
-                    KMS_AUTH_CHAIN_HELIOS_PORT
+                    KMS_REGISTRY_HELIOS_PORT
                 ));
             }
         }
