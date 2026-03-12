@@ -6,6 +6,9 @@ Scope:
 - Included: `enclaver build`, `enclaver run`, `enclaver-run` (sleeve), `odyn`, `ingress`, API/Aux API/Helios listeners.
 - Excluded: external reverse proxies and platform-specific ingress layers.
 
+Current limitation:
+- Only one Enclaver runtime is supported per EC2 instance at a time. Host-side VSOCK listeners for egress, clock sync, and hostfs use fixed ports, so separate `enclaver run` processes will conflict.
+
 ## Port Layers
 
 Enclaver networking has three relevant layers:

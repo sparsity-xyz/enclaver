@@ -700,6 +700,10 @@ mod tests {
             readme.contains("Host-Backed Directory Mounts"),
             "README should use the current host-backed directory mount terminology"
         );
+        assert!(
+            readme.contains("does not support running multiple enclaves from separate `enclaver run` processes on the same EC2 instance"),
+            "README should document the current single-Enclaver-per-EC2 runtime limitation"
+        );
 
         let hostfs_doc = read("docs/host_backed_mounts_design.md");
         assert!(
@@ -715,6 +719,16 @@ mod tests {
         assert!(
             cli_doc.contains("hostfs file proxy"),
             "CLI docs should explain that --mount uses the hostfs file proxy"
+        );
+        assert!(
+            cli_doc.contains("separate `enclaver run` processes are not currently supported concurrently on the same EC2 instance"),
+            "CLI docs should document the current single-instance runtime limitation"
+        );
+
+        let port_doc = read("docs/port_handling.md");
+        assert!(
+            port_doc.contains("Only one Enclaver runtime is supported per EC2 instance at a time"),
+            "port handling docs should call out the current single-instance runtime limitation"
         );
 
         let base_images_doc = read("docs/base-images.md");

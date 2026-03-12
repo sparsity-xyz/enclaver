@@ -33,6 +33,8 @@ sudo enclaver run -f enclaver.yaml --mount appdata=/var/lib/my-service/appdata
 
 Enclaver will create or reuse `/var/lib/my-service/appdata/.enclaver-hostfs/disk.img` and mount it inside the enclave at `/mnt/appdata`. If you reuse the same host state directory across runs, the contents persist; if you discard that host directory, the mount behaves like a host-backed temporary directory. For the full design and security model, see [Host-Backed Directory Mounts](docs/host_backed_mounts_design.md).
 
+Current limitation: Enclaver does not support running multiple enclaves from separate `enclaver run` processes on the same EC2 instance at the same time. Host-side VSOCK listeners for egress, clock sync, and hostfs are process-global today.
+
 ## Important: HTTP(S) Proxy Support for Enclave Apps
 
 Applications running **inside the enclave** have no direct outbound network access. Any external HTTP/HTTPS traffic must go through Enclaver/Odyn's egress proxy.

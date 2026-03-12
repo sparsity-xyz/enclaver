@@ -92,5 +92,6 @@ sudo enclaver run -f enclaver.yaml --mount appdata=/var/lib/my-service/appdata
 
 - **Privileges**: Running enclaves requires `sudo` or root permissions to access `/dev/nitro_enclaves`.
 - **Docker Dependency**: `enclaver run` requires a running Docker daemon.
+- **Single-instance limitation**: separate `enclaver run` processes are not currently supported concurrently on the same EC2 instance because host-side VSOCK listeners use fixed ports.
 - **Port Model**: For full details on `ingress` vs `--publish` and the host/container/enclave mapping layers, see [Port Handling](port_handling.md).
 - **Host-backed mounts**: `--mount` provisions or reuses a dedicated loopback image under the supplied host state directory, binds it into the Sleeve container, and `odyn` mounts it inside the enclave through the hostfs file proxy before the application starts.
