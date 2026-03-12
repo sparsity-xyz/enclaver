@@ -10,7 +10,9 @@ ARG NITRO_BOOTSTRAP_REF=v6.6.79
 FROM nixos/nix:2.21.4 AS nitro_bootstrap
 ARG NITRO_BOOTSTRAP_REF
 
-RUN nix-env -f '<nixpkgs>' -iA git
+# The Nix base image is intentionally minimal, so install the tools used to
+# patch the upstream kernel config before rebuilding the blobs.
+RUN nix-env -f '<nixpkgs>' -iA git gnused
 
 WORKDIR /build
 
