@@ -36,8 +36,9 @@ RUN for cfg in kernel/microvm-kernel-config-x86_64 kernel/microvm-kernel-config-
         grep -Eq '^# CONFIG_FUSE_FS is not set$|^CONFIG_FUSE_FS=' "${cfg}"; \
         sed -i -E 's|^# CONFIG_FUSE_FS is not set$|CONFIG_FUSE_FS=y|; s|^CONFIG_FUSE_FS=.*$|CONFIG_FUSE_FS=y|' "${cfg}"; \
         grep -Eq '^CONFIG_FUSE_FS=y$' "${cfg}"; \
-    done \
-    && nix-build -A all
+    done
+
+RUN nix-build -A all
 
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 

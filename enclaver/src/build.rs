@@ -455,6 +455,27 @@ mod tests {
             .to_path_buf()
     }
 
+    fn collect_doc_files(path: &Path, files: &mut Vec<PathBuf>) {
+        if path.is_dir() {
+            for entry in
+                fs::read_dir(path).unwrap_or_else(|err| panic!("reading directory {path:?}: {err}"))
+            {
+                let entry = entry
+                    .unwrap_or_else(|err| panic!("reading directory entry in {path:?}: {err}"));
+                collect_doc_files(&entry.path(), files);
+            }
+            return;
+        }
+
+        let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+            return;
+        };
+
+        if matches!(extension, "md" | "yaml" | "yml") {
+            files.push(path.to_path_buf());
+        }
+    }
+
     #[test]
     fn default_nitro_cli_image_uses_self_hosted_public_ecr() {
         assert_eq!(
@@ -557,6 +578,50 @@ mod tests {
         assert!(
             !contents.contains("scripts/validate-nitro-cli-image.sh"),
             "release workflow should not run the manual nitro-cli validation/publish flow"
+        );
+    }
+
+    #[test]
+    fn documentation_only_keeps_the_upstream_repo_link() {
+        let root = repo_root();
+        let mut files = Vec::new();
+
+        for rel_path in ["README.md", "CODE_OF_CONDUCT.md", "docs", "examples"] {
+            collect_doc_files(&root.join(rel_path), &mut files);
+        }
+
+        let mut violations = Vec::new();
+        for path in files {
+            let rel_path = path
+                .strip_prefix(&root)
+                .expect("doc file should live under the repository root");
+            let contents =
+                fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+            for (line_no, line) in contents.lines().enumerate() {
+                let mentions_upstream = line.contains("enclaver-io")
+                    || line.contains("github.com/enclaver-io")
+                    || line.contains("enclaver.io");
+
+                if !mentions_upstream {
+                    continue;
+                }
+
+                let is_allowed_repo_reference = rel_path == Path::new("README.md")
+                    && line.contains(
+                        "[enclaver-io/enclaver](https://github.com/enclaver-io/enclaver)",
+                    );
+
+                if !is_allowed_repo_reference {
+                    violations.push(format!("{}:{}: {}", rel_path.display(), line_no + 1, line));
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "documentation should not reference enclaver-io outside the README upstream repo link: {}",
+            violations.join(" | ")
         );
     }
 }

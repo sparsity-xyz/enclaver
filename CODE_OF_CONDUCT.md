@@ -59,8 +59,8 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-opensource@enclaver.io.
+reported privately to the community leaders responsible for enforcement through
+the repository maintainers.
 
 All complaints will be reviewed and investigated promptly and fairly.
 
