@@ -41,7 +41,7 @@ The codebase has three execution domains:
   - manifest schema
   - validation rules
   - effective defaults such as default-on `clock_sync`
-  - `storage.mounts[]` validation for host-backed persistent directories
+  - `storage.mounts[]` validation for host-backed directory mounts
 
 ### Host/runtime path
 
@@ -50,7 +50,7 @@ The codebase has three execution domains:
   - mounts `/dev/nitro_enclaves`
   - sets `privileged: true`
   - wires `-p/--publish` host port mappings
-  - prepares loopback-backed persistent mount images and bind-mounts them into Sleeve
+  - prepares loopback-backed host mount images and bind-mounts them into Sleeve
 
 - `enclaver/src/hostfs.rs`
   - resolves `--mount` runtime bindings against `storage.mounts[]`
@@ -96,7 +96,7 @@ The codebase has three execution domains:
   - sets uppercase and lowercase proxy env vars
 
 - `enclaver/src/bin/odyn/fs_mount.rs`
-  - enclave-side FUSE mount service for host-backed persistent directories
+  - enclave-side FUSE mount service for host-backed directory mounts
   - probes hostfs proxies, ensures `/dev/fuse` exists, and mounts each configured path
 
 - `enclaver/src/bin/odyn/clock_sync.rs`
@@ -204,7 +204,7 @@ Shutdown is the reverse order of service startup.
 
 Default images from `enclaver/src/build.rs`:
 
-- Nitro CLI: `public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest`
+- Nitro CLI: `public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest`
 - Odyn: `public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest`
 - Sleeve: `public.ecr.aws/d4t4u8d2/sparsity-ai/sleeve:latest`
 

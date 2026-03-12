@@ -42,6 +42,7 @@ jobs:
     runs-on: ${{ matrix.host }}
 
     permissions:
+      contents: read
       id-token: write
       attestations: write
 
@@ -52,10 +53,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache release target directory
+        uses: actions/cache@v4
         with:
-          workspaces: "enclaver -> target"
-          key: ${{ matrix.target }}
+          path: enclaver/target
+          key: ${{ runner.os }}-release-target-${{ matrix.target }}-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-target-${{ matrix.target }}-
+            ${{ runner.os }}-release-target-
 
       - name: Build Release Binaries (native cargo)
         if: ${{ !matrix.uses_musl }}

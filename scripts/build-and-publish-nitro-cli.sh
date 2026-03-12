@@ -7,8 +7,15 @@
 # This script:
 #   1. Authenticates Docker to AWS Public ECR
 #   2. Creates the ECR repository if it doesn't exist
-#   3. Builds the nitro-cli image for linux/amd64 and linux/arm64
-#   4. Pushes the multi-arch image to ECR
+#   3. Builds a local validation image for linux/amd64
+#   4. Verifies the image ships a FUSE-enabled enclave kernel
+#   5. Builds the nitro-cli image for linux/amd64
+#   6. Pushes the amd64 image to ECR
+#
+# We rebuild Nitro CLI because the stock AWS blobs do not enable FUSE in the
+# enclave kernel, which means Odyn cannot mount host-backed directories through
+# the hostfs file proxy. Publishing is currently limited to linux/amd64 because
+# the bootstrap build is not yet reliable in the arm64 release path.
 #
 # Prerequisites:
 #   - AWS CLI configured with appropriate credentials
@@ -91,6 +98,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 FULL_IMAGE_URI="${REGISTRY}/${REPO_NAME}"
+VALIDATION_IMAGE_URI="${FULL_IMAGE_URI}:validate-${TAG}"
+VALIDATION_PLATFORM="linux/amd64"
+PUBLISH_PLATFORM="linux/amd64"
+BUILD_CACHE_DIR="$(mktemp -d)"
+
+cleanup() {
+    rm -rf "${BUILD_CACHE_DIR}"
+}
+
+trap cleanup EXIT
+
+local_arch=$(uname -m)
+if [[ "${local_arch}" != "x86_64" ]]; then
+    log_error "nitro-cli publishing is currently supported only on x86_64 hosts."
+    log_error "The published nitro-cli image is restricted to ${PUBLISH_PLATFORM}."
+    exit 1
+fi
 
 log_info "Building nitro-cli image..."
 log_info "  Dockerfile: ${DOCKERFILE_PATH}"
@@ -133,7 +157,7 @@ else
     log_info "Repository already exists: ${REPO_NAME}"
 fi
 
-# Step 3: Set up buildx builder for multi-arch builds
+# Step 3: Set up buildx builder
 BUILDER_NAME="nitro-cli-builder"
 if ! docker buildx inspect "${BUILDER_NAME}" &> /dev/null; then
     log_info "Creating buildx builder: ${BUILDER_NAME}"
@@ -142,16 +166,31 @@ else
     docker buildx use "${BUILDER_NAME}"
 fi
 
-# Step 4: Build and push multi-arch image
-log_info "Building and pushing multi-arch image (amd64, arm64)..."
+# Step 4: Build and validate the amd64 image locally
+log_info "Building local validation image for ${VALIDATION_PLATFORM}..."
 docker buildx build \
-    --platform linux/amd64,linux/arm64 \
+    --platform "${VALIDATION_PLATFORM}" \
+    --file "${DOCKERFILE_PATH}" \
+    --tag "${VALIDATION_IMAGE_URI}" \
+    --cache-to "type=local,dest=${BUILD_CACHE_DIR},mode=max" \
+    --load \
+    .
+
+log_info "Validating nitro-cli image contents..."
+"${REPO_ROOT}/scripts/validate-nitro-cli-image.sh" "${VALIDATION_IMAGE_URI}"
+
+# Step 5: Build and push the amd64 image, reusing the validated build cache so
+# the expensive bootstrap kernel rebuild does not run twice in one publish flow.
+log_info "Building and pushing ${PUBLISH_PLATFORM} image with cached layers..."
+docker buildx build \
+    --platform "${PUBLISH_PLATFORM}" \
     --file "${DOCKERFILE_PATH}" \
     --tag "${FULL_IMAGE_URI}:${TAG}" \
+    --cache-from "type=local,src=${BUILD_CACHE_DIR}" \
     --push \
     .
 
-# Step 5: Verify the push
+# Step 6: Verify the push
 log_info "Verifying image was pushed..."
 if docker buildx imagetools inspect "${FULL_IMAGE_URI}:${TAG}" &> /dev/null; then
     log_info "✅ Successfully pushed: ${FULL_IMAGE_URI}:${TAG}"
@@ -167,11 +206,5 @@ echo "=========================================="
 echo ""
 echo "Image URI: ${FULL_IMAGE_URI}:${TAG}"
 echo ""
-echo "To use this image in Enclaver, update enclaver/src/build.rs:"
-echo ""
-echo "  const NITRO_CLI_IMAGE: &str = \"${FULL_IMAGE_URI}:${TAG}\";"
-echo ""
-echo "Or update the Dockerfiles to use it:"
-echo ""
-echo "  FROM ${FULL_IMAGE_URI}:${TAG} AS nitro_cli"
+echo "Validated local image: ${VALIDATION_IMAGE_URI}"
 echo ""

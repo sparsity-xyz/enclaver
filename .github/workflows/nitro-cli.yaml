@@ -25,6 +25,20 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Build Nitro CLI Validation Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: dockerfiles/nitro-cli.dockerfile
+          platforms: linux/amd64
+          cache-from: type=gha,scope=nitro-cli-amd64
+          cache-to: type=gha,mode=max,scope=nitro-cli-amd64
+          load: true
+          tags: nitro-cli:validation
+
+      - name: Validate Nitro CLI Image
+        run: ./scripts/validate-nitro-cli-image.sh nitro-cli:validation
+
       - name: Configure AWS credentials from OIDC
         uses: aws-actions/configure-aws-credentials@v5
         with:
@@ -43,7 +57,9 @@ jobs:
         with:
           context: .
           file: dockerfiles/nitro-cli.dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
+          cache-from: type=gha,scope=nitro-cli-amd64
+          cache-to: type=gha,mode=max,scope=nitro-cli-amd64
           push: true
           tags: ${{ env.NITRO_CLI_IMAGE }}:${{ github.event.inputs.tag }}
 

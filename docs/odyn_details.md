@@ -66,11 +66,12 @@ Shutdown order is the reverse:
 ### Host-backed mounts
 
 - Odyn mounts host-backed directories before egress, API startup, and app launch
+- the same primitive can be used as a temporary working directory or persistent state, depending on whether the host state directory is reused
 - each mount uses a deterministic hostfs vsock port derived from its manifest order
 - required mounts fail startup if the host proxy is unavailable or the FUSE mount cannot be created
 - optional mounts log a warning and are skipped
 - mount paths are created automatically if missing
-- file data, directory metadata, and capacity come from the hostfs proxy rather than enclave-local storage
+- file data, directory metadata, and capacity come from the hostfs file proxy rather than enclave-local storage
 
 ### Clock sync
 

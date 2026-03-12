@@ -287,13 +287,13 @@ storage:
 
 ---
 
-### 7. Host-Backed Persistent Mounts
+### 7. Host-Backed Directory Mounts
 
-**Purpose**: Gives your application a normal directory inside the enclave whose contents persist on the parent instance across enclave restarts.
+**Purpose**: Gives your application a normal directory inside the enclave whose data is backed by the parent instance. Reusing the same host state directory preserves contents across enclave restarts; discarding it makes the mount behave like a host-backed temporary directory.
 
 **How it works**:
 - `enclaver run --mount <name>=<host_state_dir>` prepares or reuses a fixed-size loopback image on the host
-- `enclaver-run` exposes that filesystem over a dedicated vsock port
+- `enclaver-run` exposes that filesystem through a hostfs file proxy on a dedicated vsock port
 - Odyn mounts a FUSE filesystem at the configured `mount_path` before your app starts
 - Your application uses ordinary file APIs against that mount path
 

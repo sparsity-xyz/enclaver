@@ -57,6 +57,9 @@ impl HostFsMountService {
             });
         }
 
+        // Host-backed directory mounts are surfaced through the hostfs file
+        // proxy, but the last hop inside the enclave is still a real FUSE mount.
+        // That is why the Nitro CLI image rebuilds the EIF kernel with FUSE enabled.
         ensure_fuse_available()?;
 
         let mut active_mounts = Vec::new();

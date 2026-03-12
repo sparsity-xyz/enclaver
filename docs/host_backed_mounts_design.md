@@ -1,16 +1,21 @@
-# Host-Backed Persistent Mounts
+# Host-Backed Directory Mounts
 
 This document describes the current Enclaver design and implementation for
-host-backed persistent directories inside Nitro Enclaves.
+host-backed directory mounts inside Nitro Enclaves.
 
-Nova Platform refers to the same capability as a Host-Backed Temporary Directory Mount.
-In Enclaver itself, the underlying primitive is a manifest-declared
-`storage.mounts[]` entry plus a runtime `--mount <name>=<host_state_dir>` binding.
+Nova Platform refers to the same capability as a Host-Backed Temporary Directory
+Mount. Enclaver uses the same underlying primitive: a manifest-declared
+`storage.mounts[]` entry plus a runtime `--mount <name>=<host_state_dir>`
+binding, exposed to the enclave through a hostfs file proxy.
+
+Whether the directory behaves as "temporary" or "persistent" depends on the
+lifecycle of the bound `host_state_dir`. Reuse the same directory and Enclaver
+will reuse the same loopback image; discard it and the next run starts fresh.
 
 ## Goal
 
 - let an enclave application use a normal directory such as `/mnt/appdata`
-- persist that directory on the parent instance
+- back that directory with storage on the parent instance
 - keep the application interface language-agnostic
 
 ## Architecture
@@ -37,8 +42,8 @@ filesystem operations fail with `ENOSPC`.
 1. The manifest declares `storage.mounts[]`.
 2. `enclaver run --mount <name>=<host_state_dir>` resolves the runtime bindings.
 3. The host-side wrapper creates or reuses `HOST_STATE_DIR/.enclaver-hostfs/disk.img`,
-   formats it, mounts it on the parent instance, and bind-mounts it into the
-   Sleeve container.
+   formats it on first use, mounts it on the parent instance, and bind-mounts it
+   into the Sleeve container.
 4. `enclaver-run` starts one hostfs proxy per mount on deterministic vsock ports.
 5. `odyn` creates the target mount directories, ensures `/dev/fuse` exists, and
    mounts a FUSE filesystem at each configured `mount_path`.
@@ -88,7 +93,7 @@ threads and the host proxy.
 
 ## Security Model
 
-This storage is persistent, but it is not trusted.
+This storage is host-backed, but it is not trusted.
 
 - the parent instance still controls the backing storage
 - the parent instance can tamper with the stored bytes
@@ -128,6 +133,8 @@ Existing symlinks are surfaced in metadata and directory listings, but explicit
 ## Operational Notes
 
 - each mount gets its own loopback image and quota
+- reusing the same `host_state_dir` preserves contents across enclave restarts
+- deleting `HOST_STATE_DIR/.enclaver-hostfs/` resets the mount to an empty filesystem
 - optional mounts are skipped if the matching runtime bind is absent
 - required mounts fail startup if the runtime bind or host proxy is unavailable
 - host-side prerequisites are `mkfs.ext4`, `mount`, and `umount`

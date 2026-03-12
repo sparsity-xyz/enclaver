@@ -40,6 +40,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: default
+            features: ""
+            rustflags: "-Dwarnings"
+          - id: run-enclave-odyn
+            features: "run_enclave,odyn"
+            rustflags: "-Dwarnings"
+          - id: run-enclave-odyn-tracing
+            features: "run_enclave,odyn,tracing"
+            rustflags: "--cfg=tokio_unstable -Dwarnings"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,28 +66,37 @@ jobs:
       - name: Install Clippy
         run: rustup component add clippy
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Cache Cargo registry and git data
+        uses: actions/cache@v4
         with:
-          workspaces: "enclaver -> target"
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: ${{ runner.os }}-cargo-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUSTUP_TOOLCHAIN }}-
+            ${{ runner.os }}-cargo-
 
-      - name: Check with default features
-        env:
-          RUSTFLAGS: "-Dwarnings"
-        run: |
-          cargo clippy --quiet --no-deps --manifest-path enclaver/Cargo.toml
+      - name: Cache Rust target directory
+        uses: actions/cache@v4
+        with:
+          path: enclaver/target
+          key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-clippy-${{ matrix.id }}-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-clippy-${{ matrix.id }}-
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-
 
-      - name: Check all binaries
+      - name: Check with clippy (${{ matrix.id }})
         env:
-          RUSTFLAGS: "-Dwarnings"
+          RUSTFLAGS: ${{ matrix.rustflags }}
         run: |
-          cargo clippy --quiet --no-deps --manifest-path enclaver/Cargo.toml --features=run_enclave,odyn
-
-      - name: Check with tracing enabled
-        env:
-          RUSTFLAGS: "--cfg=tokio_unstable -Dwarnings"
-        run: |
-          cargo clippy --quiet --no-deps --manifest-path enclaver/Cargo.toml --features=run_enclave,odyn,tracing
+          if [[ -z "${{ matrix.features }}" ]]; then
+            cargo clippy --quiet --no-deps --manifest-path enclaver/Cargo.toml
+          else
+            cargo clippy --quiet --no-deps --manifest-path enclaver/Cargo.toml --features="${{ matrix.features }}"
+          fi
 
   test:
     runs-on: ubuntu-latest
@@ -83,11 +105,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        feature_set:
-          - default
-          - run_enclave
-          - odyn
-          - run_enclave,odyn
+        include:
+          - id: default
+            features: ""
+          - id: run-enclave
+            features: "run_enclave"
+          - id: odyn
+            features: "odyn"
+          - id: run-enclave-odyn
+            features: "run_enclave,odyn"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -98,15 +124,33 @@ jobs:
       - name: Install Rust Toolchain
         run: rustup toolchain install $RUSTUP_TOOLCHAIN
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Cache Cargo registry and git data
+        uses: actions/cache@v4
         with:
-          workspaces: "enclaver -> target"
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: ${{ runner.os }}-cargo-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUSTUP_TOOLCHAIN }}-
+            ${{ runner.os }}-cargo-
 
-      - name: Run tests (${{ matrix.feature_set }})
+      - name: Cache Rust target directory
+        uses: actions/cache@v4
+        with:
+          path: enclaver/target
+          key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-${{ matrix.id }}-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-${{ matrix.id }}-
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-
+
+      - name: Run tests (${{ matrix.id }})
         run: |
-          if [[ "${{ matrix.feature_set }}" == "default" ]]; then
+          if [[ -z "${{ matrix.features }}" ]]; then
             cargo test --quiet --manifest-path enclaver/Cargo.toml
           else
-            cargo test --quiet --manifest-path enclaver/Cargo.toml --features="${{ matrix.feature_set }}"
+            cargo test --quiet --manifest-path enclaver/Cargo.toml --features="${{ matrix.features }}"
           fi

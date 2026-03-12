@@ -20,7 +20,7 @@ use uuid::Uuid;
 const ENCLAVE_OVERLAY_CHOWN: &str = "0:0";
 const RELEASE_OVERLAY_CHOWN: &str = "0:0";
 
-const NITRO_CLI_IMAGE: &str = "public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest";
+const NITRO_CLI_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest";
 const ODYN_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest";
 const ODYN_IMAGE_BINARY_PATH: &str = "/usr/local/bin/odyn";
 const SLEEVE_IMAGE: &str = "public.ecr.aws/d4t4u8d2/sparsity-ai/sleeve:latest";
@@ -433,4 +433,294 @@ pub struct ResolvedSources {
 
     #[serde(rename = "Sleeve")]
     sleeve: ImageRef,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NITRO_CLI_IMAGE;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn nitro_cli_image_repo() -> String {
+        NITRO_CLI_IMAGE
+            .strip_suffix(":latest")
+            .expect("nitro-cli default image should use the latest tag")
+            .to_string()
+    }
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("enclaver crate should live under repository root")
+            .to_path_buf()
+    }
+
+    fn collect_doc_files(path: &Path, files: &mut Vec<PathBuf>) {
+        if path.is_dir() {
+            for entry in
+                fs::read_dir(path).unwrap_or_else(|err| panic!("reading directory {path:?}: {err}"))
+            {
+                let entry = entry
+                    .unwrap_or_else(|err| panic!("reading directory entry in {path:?}: {err}"));
+                collect_doc_files(&entry.path(), files);
+            }
+            return;
+        }
+
+        let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+            return;
+        };
+
+        if matches!(extension, "md" | "yaml" | "yml") {
+            files.push(path.to_path_buf());
+        }
+    }
+
+    #[test]
+    fn default_nitro_cli_image_uses_self_hosted_public_ecr() {
+        assert_eq!(
+            NITRO_CLI_IMAGE,
+            "public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest"
+        );
+        assert_eq!(
+            nitro_cli_image_repo(),
+            "public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli"
+        );
+    }
+
+    #[test]
+    fn sleeve_dockerfiles_default_to_same_nitro_cli_image() {
+        for rel_path in [
+            "dockerfiles/sleeve-dev.dockerfile",
+            "dockerfiles/sleeve-release.dockerfile",
+        ] {
+            let path = repo_root().join(rel_path);
+            let contents =
+                fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+            assert!(
+                contents.contains(&format!("ARG NITRO_CLI_IMAGE={NITRO_CLI_IMAGE}")),
+                "{rel_path} should default to {NITRO_CLI_IMAGE}"
+            );
+            assert!(
+                contents.contains("FROM ${NITRO_CLI_IMAGE} AS nitro_cli"),
+                "{rel_path} should source nitro-cli from the overridable build arg"
+            );
+        }
+    }
+
+    #[test]
+    fn nitro_cli_dockerfile_rebuilds_fuse_enabled_blobs() {
+        let path = repo_root().join("dockerfiles/nitro-cli.dockerfile");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            contents.contains("aws-nitro-enclaves-sdk-bootstrap"),
+            "nitro-cli image should rebuild the official Nitro Enclaves blobs from source"
+        );
+        assert!(
+            contents.contains("CONFIG_FUSE_FS=y"),
+            "nitro-cli image should enable FUSE in the rebuilt enclave kernel config"
+        );
+        assert!(
+            contents.contains("sed -i -E"),
+            "nitro-cli image should rewrite the upstream kernel config before rebuilding blobs"
+        );
+        assert!(
+            contents.contains("s|^CONFIG_FUSE_FS=.*$|CONFIG_FUSE_FS=y|"),
+            "nitro-cli image should force any existing CONFIG_FUSE_FS setting to CONFIG_FUSE_FS=y"
+        );
+        assert!(
+            contents.contains("test -s \"${kernel_image}\""),
+            "nitro-cli image should verify that the rebuilt kernel binary exists before publishing the blobs"
+        );
+    }
+
+    #[test]
+    fn nitro_cli_validation_script_checks_fuse_and_smoke_builds_eif() {
+        let path = repo_root().join("scripts/validate-nitro-cli-image.sh");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            contents.contains("CONFIG_FUSE_FS"),
+            "validation script should verify that the nitro-cli kernel enables FUSE"
+        );
+        assert!(
+            contents.contains("build-enclave"),
+            "validation script should run a smoke EIF build"
+        );
+    }
+
+    #[test]
+    fn nitro_cli_workflow_publishes_and_validates_self_hosted_image() {
+        let path = repo_root().join(".github/workflows/nitro-cli.yaml");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            contents.contains(&format!("NITRO_CLI_IMAGE: {}", nitro_cli_image_repo())),
+            "nitro-cli workflow should publish the self-hosted nitro-cli repository"
+        );
+        assert!(
+            contents.contains("scripts/validate-nitro-cli-image.sh"),
+            "nitro-cli workflow should validate the nitro-cli image before publishing it"
+        );
+        assert!(
+            contents.contains("platforms: linux/amd64"),
+            "nitro-cli workflow should publish only linux/amd64"
+        );
+        assert!(
+            !contents.contains("linux/amd64,linux/arm64"),
+            "nitro-cli workflow should not publish linux/arm64"
+        );
+        assert!(
+            contents.contains("cache-from: type=gha,scope=nitro-cli-amd64"),
+            "nitro-cli workflow should reuse the validated build cache for the push build"
+        );
+        assert!(
+            contents.contains("cache-to: type=gha,mode=max,scope=nitro-cli-amd64"),
+            "nitro-cli workflow should export the nitro-cli build cache between validation and push"
+        );
+    }
+
+    #[test]
+    fn nitro_cli_publish_script_is_amd64_only() {
+        let path = repo_root().join("scripts/build-and-publish-nitro-cli.sh");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            contents.contains("VALIDATION_PLATFORM=\"linux/amd64\""),
+            "nitro-cli publish script should validate only linux/amd64"
+        );
+        assert!(
+            contents.contains("PUBLISH_PLATFORM=\"linux/amd64\""),
+            "nitro-cli publish script should publish only linux/amd64"
+        );
+        assert!(
+            contents.contains("currently supported only on x86_64 hosts"),
+            "nitro-cli publish script should reject non-x86_64 hosts"
+        );
+        assert!(
+            !contents.contains("linux/amd64,linux/arm64"),
+            "nitro-cli publish script should not publish linux/arm64"
+        );
+        assert!(
+            contents.contains("--cache-to \"type=local,dest=${BUILD_CACHE_DIR},mode=max\""),
+            "nitro-cli publish script should save the validated build cache before the push build"
+        );
+        assert!(
+            contents.contains("--cache-from \"type=local,src=${BUILD_CACHE_DIR}\""),
+            "nitro-cli publish script should reuse the validated build cache for the push build"
+        );
+    }
+
+    #[test]
+    fn release_workflow_does_not_publish_nitro_cli_image() {
+        let path = repo_root().join(".github/workflows/release.yaml");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            !contents.contains("Build Nitro CLI Image"),
+            "release workflow should not publish nitro-cli automatically"
+        );
+        assert!(
+            !contents.contains("scripts/validate-nitro-cli-image.sh"),
+            "release workflow should not run the manual nitro-cli validation/publish flow"
+        );
+    }
+
+    #[test]
+    fn documentation_describes_current_hostfs_and_nitro_cli_model() {
+        let root = repo_root();
+        let read = |rel_path: &str| {
+            let path = root.join(rel_path);
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"))
+        };
+
+        let readme = read("README.md");
+        assert!(
+            readme.contains("Host-Backed Directory Mounts"),
+            "README should use the current host-backed directory mount terminology"
+        );
+
+        let hostfs_doc = read("docs/host_backed_mounts_design.md");
+        assert!(
+            hostfs_doc.contains("Host-Backed Temporary Directory"),
+            "hostfs design doc should note the Nova-style temporary-directory terminology"
+        );
+        assert!(
+            hostfs_doc.contains("Whether the directory behaves as \"temporary\" or \"persistent\""),
+            "hostfs design doc should explain that persistence depends on host_state_dir reuse"
+        );
+
+        let cli_doc = read("docs/enclaver-cli.md");
+        assert!(
+            cli_doc.contains("hostfs file proxy"),
+            "CLI docs should explain that --mount uses the hostfs file proxy"
+        );
+
+        let base_images_doc = read("docs/base-images.md");
+        assert!(
+            base_images_doc.contains("linux/amd64"),
+            "base image docs should state that Nitro CLI publishing is linux/amd64 only"
+        );
+
+        let nitro_cli_doc = read("docs/nitro_cli_fuse_image.md");
+        assert!(
+            nitro_cli_doc.contains("hostfs file proxy"),
+            "nitro-cli doc should explain why FUSE is needed for the hostfs file proxy"
+        );
+        assert!(
+            nitro_cli_doc.contains("linux/amd64"),
+            "nitro-cli doc should document the current publish architecture"
+        );
+    }
+
+    #[test]
+    fn documentation_only_keeps_the_upstream_repo_link() {
+        let root = repo_root();
+        let mut files = Vec::new();
+
+        for rel_path in ["README.md", "CODE_OF_CONDUCT.md", "docs", "examples"] {
+            collect_doc_files(&root.join(rel_path), &mut files);
+        }
+
+        let mut violations = Vec::new();
+        for path in files {
+            let rel_path = path
+                .strip_prefix(&root)
+                .expect("doc file should live under the repository root");
+            let contents =
+                fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+            for (line_no, line) in contents.lines().enumerate() {
+                let mentions_upstream = line.contains("enclaver-io")
+                    || line.contains("github.com/enclaver-io")
+                    || line.contains("enclaver.io");
+
+                if !mentions_upstream {
+                    continue;
+                }
+
+                let is_allowed_repo_reference = rel_path == Path::new("README.md")
+                    && line.contains(
+                        "[enclaver-io/enclaver](https://github.com/enclaver-io/enclaver)",
+                    );
+
+                if !is_allowed_repo_reference {
+                    violations.push(format!("{}:{}: {}", rel_path.display(), line_no + 1, line));
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "documentation should not reference enclaver-io outside the README upstream repo link: {}",
+            violations.join(" | ")
+        );
+    }
 }

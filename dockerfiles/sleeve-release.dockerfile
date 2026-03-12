@@ -1,4 +1,6 @@
-FROM public.ecr.aws/s2t1d4c6/enclaver-io/nitro-cli:latest AS nitro_cli
+ARG NITRO_CLI_IMAGE=public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest
+
+FROM ${NITRO_CLI_IMAGE} AS nitro_cli
 RUN touch /tmp/dummy
 
 ###############################
