@@ -40,6 +40,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: default
+            features: ""
+            rustflags: "-Dwarnings"
+          - id: run-enclave-odyn
+            features: "run_enclave,odyn"
+            rustflags: "-Dwarnings"
+          - id: run-enclave-odyn-tracing
+            features: "run_enclave,odyn,tracing"
+            rustflags: "--cfg=tokio_unstable -Dwarnings"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,28 +83,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: enclaver/target
-          key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-clippy-${{ hashFiles('enclaver/Cargo.lock') }}
+          key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-clippy-${{ matrix.id }}-${{ hashFiles('enclaver/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-clippy-
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-clippy-${{ matrix.id }}-
             ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-
 
-      - name: Check with default features
+      - name: Check with clippy (${{ matrix.id }})
         env:
-          RUSTFLAGS: "-Dwarnings"
+          RUSTFLAGS: ${{ matrix.rustflags }}
         run: |
-          cargo clippy --quiet --no-deps --manifest-path enclaver/Cargo.toml
-
-      - name: Check all binaries
-        env:
-          RUSTFLAGS: "-Dwarnings"
-        run: |
-          cargo clippy --quiet --no-deps --manifest-path enclaver/Cargo.toml --features=run_enclave,odyn
-
-      - name: Check with tracing enabled
-        env:
-          RUSTFLAGS: "--cfg=tokio_unstable -Dwarnings"
-        run: |
-          cargo clippy --quiet --no-deps --manifest-path enclaver/Cargo.toml --features=run_enclave,odyn,tracing
+          if [[ -z "${{ matrix.features }}" ]]; then
+            cargo clippy --quiet --no-deps --manifest-path enclaver/Cargo.toml
+          else
+            cargo clippy --quiet --no-deps --manifest-path enclaver/Cargo.toml --features="${{ matrix.features }}"
+          fi
 
   test:
     runs-on: ubuntu-latest
