@@ -152,4 +152,17 @@ mod tests {
     fn runtime_ports_accept_upper_managed_cid() {
         assert!(RuntimeHostVsockPorts::for_cid(ENCLAVER_MANAGED_CID_END).is_ok());
     }
+
+    #[test]
+    fn runtime_port_blocks_for_distinct_cids_do_not_overlap() {
+        let first = RuntimeHostVsockPorts::for_cid(ENCLAVER_MANAGED_CID_START).unwrap();
+        let second = RuntimeHostVsockPorts::for_cid(ENCLAVER_MANAGED_CID_START + 1).unwrap();
+
+        assert_ne!(first.egress_port, second.egress_port);
+        assert_ne!(first.clock_sync_port, second.clock_sync_port);
+        assert_ne!(
+            first.hostfs_mount_port(0).unwrap(),
+            second.hostfs_mount_port(0).unwrap()
+        );
+    }
 }

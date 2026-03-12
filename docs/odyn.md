@@ -294,7 +294,7 @@ storage:
 **How it works**:
 - `enclaver run --mount <name>=<host_state_dir>` prepares or reuses a fixed-size loopback image on the host
 - `enclaver-run` exposes that filesystem through a hostfs file proxy on a host-side VSOCK port derived from the enclave CID and mount order
-- Odyn mounts a FUSE filesystem at the configured `mount_path` before your app starts
+- Odyn mounts a FUSE filesystem at the configured `mount_path` before your app starts. `mount_path` must live under `/mnt/...`
 - Your application uses ordinary file APIs against that mount path
 
 **Actual host layout**:

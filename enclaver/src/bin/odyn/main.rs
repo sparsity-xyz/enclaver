@@ -97,6 +97,20 @@ impl StartedServices {
     }
 }
 
+async fn start_api_stack(
+    config: &Configuration,
+    nsm: Arc<Nsm>,
+) -> Result<(ApiService, AuxApiService)> {
+    let api = ApiService::start(config, nsm).await?;
+    match AuxApiService::start(config).await {
+        Ok(aux_api) => Ok((api, aux_api)),
+        Err(err) => {
+            api.stop().await;
+            Err(err.context("failed to start Aux API after the Internal API was already running"))
+        }
+    }
+}
+
 fn log_launch_plan(
     config: &Configuration,
     args: &CliArgs,
@@ -114,7 +128,7 @@ fn log_launch_plan(
         args.entrypoint
     );
 
-    if let Some(proxy_uri) = config.egress_proxy_uri() {
+    if let Some(proxy_uri) = config.egress_proxy_uri()? {
         info!(
             "Egress plan: enabled for user app environment via {} and host vsock port {}",
             proxy_uri, runtime_vsock.egress_port
@@ -233,10 +247,7 @@ async fn launch(args: &CliArgs) -> Result<launcher::ExitStatus> {
             }
         }
 
-        let (api, aux_api) = tokio::try_join!(
-            ApiService::start(&config, nsm.clone()),
-            AuxApiService::start(&config),
-        )?;
+        let (api, aux_api) = start_api_stack(&config, nsm.clone()).await?;
         services.api = Some(api);
         services.aux_api = Some(aux_api);
 
@@ -307,8 +318,47 @@ fn format_fatal_error(err: &anyhow::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::format_fatal_error;
+    use std::net::TcpListener;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use super::{format_fatal_error, start_api_stack};
     use anyhow::anyhow;
+    use enclaver::manifest::{Api, AuxApi, Manifest, Sources};
+    use enclaver::nsm::Nsm;
+
+    use crate::config::Configuration;
+
+    fn test_configuration(api_port: u16, aux_api_port: u16) -> Configuration {
+        Configuration {
+            config_dir: PathBuf::from("."),
+            manifest: Manifest {
+                version: "v1".to_string(),
+                name: "test".to_string(),
+                target: "target:latest".to_string(),
+                sources: Sources {
+                    app: "app:latest".to_string(),
+                    odyn: None,
+                    sleeve: None,
+                },
+                signature: None,
+                ingress: None,
+                egress: None,
+                defaults: None,
+                api: Some(Api {
+                    listen_port: api_port,
+                }),
+                aux_api: Some(AuxApi {
+                    listen_port: Some(aux_api_port),
+                }),
+                storage: None,
+                kms_integration: None,
+                helios_rpc: None,
+                clock_sync: None,
+            },
+            listener_ports: Vec::new(),
+        }
+    }
 
     #[test]
     fn fatal_error_includes_full_context_chain() {
@@ -318,5 +368,25 @@ mod tests {
 
         assert!(formatted.contains("failed to mount hostfs 'appdata'"));
         assert!(formatted.contains("inner hostfs error"));
+    }
+
+    #[tokio::test]
+    async fn start_api_stack_rolls_back_api_when_aux_api_fails() {
+        let api_probe = TcpListener::bind(("127.0.0.1", 0)).expect("reserve api port");
+        let api_port = api_probe.local_addr().expect("api addr").port();
+        drop(api_probe);
+
+        let aux_conflict = TcpListener::bind(("127.0.0.1", 0)).expect("reserve aux api port");
+        let aux_api_port = aux_conflict.local_addr().expect("aux addr").port();
+
+        let config = test_configuration(api_port, aux_api_port);
+        let err = match start_api_stack(&config, Arc::new(Nsm::new())).await {
+            Ok(_) => panic!("aux api bind should fail while its port is occupied"),
+            Err(err) => err,
+        };
+        assert!(!err.to_string().is_empty());
+
+        TcpListener::bind(("127.0.0.1", api_port))
+            .expect("api port should be released when aux api startup fails");
     }
 }

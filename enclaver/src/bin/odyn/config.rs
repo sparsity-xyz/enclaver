@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use http::Uri;
 use std::path::{Path, PathBuf};
 
@@ -29,7 +29,7 @@ impl Configuration {
         let mut manifest_path = config_dir.as_ref().to_path_buf();
         manifest_path.push(MANIFEST_FILE_NAME);
 
-        let manifest = enclaver::manifest::load_manifest(manifest_path.to_str().unwrap()).await?;
+        let manifest = enclaver::manifest::load_manifest(&manifest_path).await?;
 
         let mut listener_ports = Vec::new();
 
@@ -46,43 +46,41 @@ impl Configuration {
         })
     }
 
-    pub fn egress_proxy_uri(&self) -> Option<Uri> {
+    pub fn egress_proxy_uri(&self) -> Result<Option<Uri>> {
         if self.manifest.egress_proxy_enabled() {
             let port = self
                 .manifest
                 .egress
                 .as_ref()
-                .unwrap()
-                .proxy_port
+                .and_then(|egress| egress.proxy_port)
                 .unwrap_or(HTTP_EGRESS_PROXY_PORT);
 
-            Some(
-                Uri::builder()
-                    .scheme("http")
-                    .authority(format!("127.0.0.1:{port}"))
-                    .path_and_query("")
-                    .build()
-                    .unwrap(),
-            )
+            let proxy_uri = format!("http://127.0.0.1:{port}")
+                .parse::<Uri>()
+                .map_err(|err| {
+                    anyhow!("failed to build egress proxy URI for port {port}: {err}")
+                })?;
+
+            Ok(Some(proxy_uri))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    pub fn egress_proxy_env_vars(&self) -> Vec<(String, String)> {
-        let Some(proxy_uri) = self.egress_proxy_uri() else {
-            return Vec::new();
+    pub fn egress_proxy_env_vars(&self) -> Result<Vec<(String, String)>> {
+        let Some(proxy_uri) = self.egress_proxy_uri()? else {
+            return Ok(Vec::new());
         };
 
         let proxy = proxy_uri.to_string();
-        vec![
+        Ok(vec![
             ("http_proxy".to_string(), proxy.clone()),
             ("https_proxy".to_string(), proxy.clone()),
             ("HTTP_PROXY".to_string(), proxy.clone()),
             ("HTTPS_PROXY".to_string(), proxy),
             ("no_proxy".to_string(), LOOPBACK_NO_PROXY.to_string()),
             ("NO_PROXY".to_string(), LOOPBACK_NO_PROXY.to_string()),
-        ]
+        ])
     }
 
     pub fn api_port(&self) -> Option<u16> {
@@ -302,7 +300,7 @@ mod tests {
             proxy_port: Some(8123),
         });
 
-        let vars = cfg.egress_proxy_env_vars();
+        let vars = cfg.egress_proxy_env_vars().unwrap();
 
         assert!(vars.contains(&(
             "http_proxy".to_string(),
@@ -314,7 +312,7 @@ mod tests {
     #[test]
     fn egress_proxy_env_vars_is_empty_when_egress_is_disabled() {
         let cfg = base_config();
-        assert!(cfg.egress_proxy_env_vars().is_empty());
+        assert!(cfg.egress_proxy_env_vars().unwrap().is_empty());
     }
 
     #[test]

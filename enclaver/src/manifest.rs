@@ -153,6 +153,8 @@ pub struct HostFsMountConfig {
 
 impl HostFsMountConfig {
     fn validate(&self, context: &str) -> Result<()> {
+        const HOSTFS_ALLOWED_ROOT: &str = "/mnt";
+
         if self.name.trim().is_empty() {
             bail!("{context}.name is required");
         }
@@ -174,27 +176,13 @@ impl HostFsMountConfig {
         }) {
             bail!("{context}.mount_path must not contain '.' or '..' path components");
         }
-        for forbidden in [
-            Path::new("/etc"),
-            Path::new("/bin"),
-            Path::new("/usr"),
-            Path::new("/lib"),
-            Path::new("/lib64"),
-            Path::new("/sbin"),
-            Path::new("/proc"),
-            Path::new("/sys"),
-            Path::new("/dev"),
-            Path::new("/root"),
-            Path::new("/var"),
-            Path::new("/tmp"),
-            Path::new("/home"),
-        ] {
-            if self.mount_path == forbidden || self.mount_path.starts_with(forbidden) {
-                bail!(
-                    "{context}.mount_path '{}' targets a reserved system path",
-                    self.mount_path.display()
-                );
-            }
+        let allowed_root = Path::new(HOSTFS_ALLOWED_ROOT);
+        if self.mount_path == allowed_root || !self.mount_path.starts_with(allowed_root) {
+            bail!(
+                "{context}.mount_path must live under {} (for example {}/appdata)",
+                HOSTFS_ALLOWED_ROOT,
+                HOSTFS_ALLOWED_ROOT
+            );
         }
 
         if self.size_mb == 0 {
@@ -689,13 +677,15 @@ storage:
     }
 
     #[test]
-    fn test_parse_manifest_rejects_hostfs_mount_on_reserved_path() {
-        for reserved in [
+    fn test_parse_manifest_rejects_hostfs_mount_outside_allowed_root() {
+        for mount_path in [
+            "/mnt",
             "/etc/appdata",
             "/root/.ssh",
             "/var/lib/appdata",
             "/tmp/appdata",
             "/home/appdata",
+            "/run/appdata",
         ] {
             let raw_manifest = format!(
                 r#"
@@ -707,14 +697,14 @@ sources:
 storage:
   mounts:
     - name: appdata
-      mount_path: {reserved}
+      mount_path: {mount_path}
       size_mb: 128
 "#
             );
 
             assert!(
                 parse_manifest(raw_manifest.as_bytes()).is_err(),
-                "reserved path {reserved} should be rejected"
+                "mount path {mount_path} should be rejected"
             );
         }
     }

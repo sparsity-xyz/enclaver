@@ -175,7 +175,7 @@ storage:
   # - `odyn` mounts it inside the enclave before the application starts.
   mounts:
     - name: "appdata"        # [BUILD] Stable runtime mount identifier.
-      mount_path: "/mnt/appdata" # [ODYN] Path mounted inside the enclave before app launch.
+      mount_path: "/mnt/appdata" # [ODYN] Path mounted inside the enclave before app launch. Must live under /mnt/.
       required: true         # [BUILD] Fail runtime binding resolution when omitted.
       size_mb: 10240         # [BUILD] Loopback image size in MiB. Runtime always creates the host state dir if missing and mounts rw.
 

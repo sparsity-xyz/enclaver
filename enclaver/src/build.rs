@@ -689,6 +689,8 @@ mod tests {
 
     #[test]
     fn documentation_describes_current_hostfs_and_nitro_cli_model() {
+        // Intentionally strict: these checks pin the user-facing docs to the
+        // current runtime/deployment contract so doc drift fails fast in CI.
         let root = repo_root();
         let read = |rel_path: &str| {
             let path = root.join(rel_path);

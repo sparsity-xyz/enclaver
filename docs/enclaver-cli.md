@@ -52,7 +52,7 @@ Runs a pre-packaged Enclaver container image. This command simplifies the `docke
 | `-d`, `--debug-mode` | Enable debug mode for the enclave supervisor. |
 | `--cpu-count <INT>` | **(New)** Number of vCPUs to assign to the enclave. Overrides the `defaults` section in `enclaver.yaml`. |
 | `--memory-mb <INT>` | **(New)** Enclave memory in MiB. Overrides the `defaults` section in `enclaver.yaml`. |
-| `--mount <NAME=HOST_STATE_DIR>` | Prepare or reuse a loopback-image-backed host directory for a manifest-declared `storage.mounts[]` entry and expose it inside the enclave at that mount's `mount_path` through the hostfs file proxy. Reusing the same `HOST_STATE_DIR` preserves contents across runs. Requires manifest lookup via `-f` or the default `enclaver.yaml`. |
+| `--mount <NAME=HOST_STATE_DIR>` | Prepare or reuse a loopback-image-backed host directory for a manifest-declared `storage.mounts[]` entry and expose it inside the enclave at that mount's `mount_path` through the hostfs file proxy. `mount_path` must live under `/mnt/...`. Reusing the same `HOST_STATE_DIR` preserves contents across runs. Requires manifest lookup via `-f` or the default `enclaver.yaml`. |
 
 #### Parameter Priority (CPU/RAM)
 

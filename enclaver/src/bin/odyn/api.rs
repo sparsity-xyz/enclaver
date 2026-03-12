@@ -31,7 +31,7 @@ impl ApiService {
 
                 // Load AWS config from IMDS (EC2 instance metadata) via proxy
                 // inside an enclave, we MUST use a proxy to reach IMDS
-                let proxy_uri = config.egress_proxy_uri().ok_or_else(|| {
+                let proxy_uri = config.egress_proxy_uri()?.ok_or_else(|| {
                     anyhow::anyhow!("Egress proxy is not configured, but is required for AWS IMDS access inside the enclave.")
                 })?;
 

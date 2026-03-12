@@ -35,6 +35,10 @@ storage:
       size_mb: 10240
 ```
 
+`mount_path` must live under `/mnt/...` inside the enclave. Enclaver treats
+host-backed mounts as application data mounts, not arbitrary filesystem
+overlays.
+
 Runtime binding:
 
 ```bash

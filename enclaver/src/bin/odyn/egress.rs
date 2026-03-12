@@ -18,7 +18,7 @@ impl EgressService {
         config: &Configuration,
         runtime_vsock: &RuntimeHostVsockPorts,
     ) -> Result<Self> {
-        let task = if let Some(proxy_uri) = config.egress_proxy_uri() {
+        let task = if let Some(proxy_uri) = config.egress_proxy_uri()? {
             info!("Starting egress");
 
             let egress = config.manifest.egress.as_ref().ok_or_else(|| {
@@ -30,9 +30,8 @@ impl EgressService {
             let policy = Arc::new(EgressPolicy::new(egress));
             let host_egress_port = runtime_vsock.egress_port;
 
-            set_proxy_env_vars(config);
-
             let proxy = EnclaveHttpProxy::bind(proxy_port).await?;
+            set_proxy_env_vars(config)?;
 
             Some(tokio::task::spawn(async move {
                 proxy.serve(host_egress_port, policy).await;
@@ -52,12 +51,13 @@ impl EgressService {
     }
 }
 
-fn set_proxy_env_vars(config: &Configuration) {
+fn set_proxy_env_vars(config: &Configuration) -> Result<()> {
     unsafe {
         // SAFETY: While not 100% b/c it is a multi-threaded program, with 3rd party code,
         // we only get/set env vars in a ::start() methods that are serialized via .await.
-        for (name, value) in config.egress_proxy_env_vars() {
+        for (name, value) in config.egress_proxy_env_vars()? {
             std::env::set_var(name, value);
         }
     }
+    Ok(())
 }

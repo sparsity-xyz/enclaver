@@ -8,10 +8,24 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::process::Stdio;
-use tokio::process::{ChildStdout, Command};
+use tokio::process::{Child, ChildStdout, Command};
 
 pub struct NitroCLI {
     program: String,
+}
+
+pub struct AttachedConsole {
+    child: Child,
+}
+
+impl AttachedConsole {
+    pub fn into_parts(mut self) -> Result<(Child, ChildStdout)> {
+        let stdout =
+            self.child.stdout.take().ok_or_else(|| {
+                anyhow!("invariant violated: nitro-cli console stdout was not piped")
+            })?;
+        Ok((self.child, stdout))
+    }
 }
 
 impl NitroCLI {
@@ -94,7 +108,7 @@ impl NitroCLI {
         .await
     }
 
-    pub async fn console(&self, enclave_id: &str) -> Result<ChildStdout> {
+    pub async fn console(&self, enclave_id: &str) -> Result<AttachedConsole> {
         let cmd_args = AttachConsoleArgs {
             enclave_id: enclave_id.to_string(),
         }
@@ -109,7 +123,7 @@ impl NitroCLI {
             .spawn()
             .map_err(|err| anyhow!("failed to execute nitro-cli: {err}"))?;
 
-        Ok(child.stdout.unwrap())
+        Ok(AttachedConsole { child })
     }
 }
 

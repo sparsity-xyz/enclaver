@@ -1,7 +1,7 @@
 use crate::constants::{
     APP_LOG_PORT, EIF_FILE_NAME, MANIFEST_FILE_NAME, RELEASE_BUNDLE_DIR, STATUS_PORT,
 };
-use crate::hostfs::{CONTAINER_HOSTFS_ROOT, hostfs_vsock_port};
+use crate::hostfs::CONTAINER_HOSTFS_ROOT;
 use crate::manifest::{Defaults, Manifest, load_manifest};
 use crate::runtime_vsock::{RuntimeHostVsockPorts, allocate_managed_enclave_cid};
 use crate::utils;
@@ -24,7 +24,9 @@ use crate::proxy::fs_host::HostFsProxy;
 use crate::proxy::ingress::HostProxy;
 use std::collections::HashSet;
 
-const LOG_VSOCK_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+const LOG_VSOCK_INITIAL_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+const LOG_VSOCK_MAX_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const LOG_VSOCK_RETRY_LIMIT: usize = 16;
 const STATUS_VSOCK_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const STATUS_VSOCK_RETRY_LIMIT: i32 = 100;
 const CLOCK_SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -52,6 +54,7 @@ pub struct Enclave {
     debug_mode: bool,
     enclave_info: Option<EnclaveInfo>,
     runtime_vsock: Option<RuntimeHostVsockPorts>,
+    debug_console: Option<tokio::process::Child>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -123,6 +126,7 @@ impl Enclave {
             debug_mode: opts.debug_mode,
             enclave_info: None,
             runtime_vsock: None,
+            debug_console: None,
             tasks: Vec::new(),
         })
     }
@@ -354,7 +358,7 @@ impl Enclave {
         // port from its local CID, so both sides must walk the list in the
         // same order.
         for (index, mount) in mounts.iter().enumerate() {
-            let port = hostfs_vsock_port(runtime_vsock.enclave_cid, index).map_err(|err| {
+            let port = runtime_vsock.hostfs_mount_port(index).map_err(|err| {
                 anyhow!(
                     "hostfs mount '{}' cannot be assigned a vsock port: {err}",
                     mount.name
@@ -449,14 +453,11 @@ impl Enclave {
         self.tasks
             .push(utils::spawn!("odyn log stream", async move {
                 info!("waiting for enclave to boot to stream logs");
-                let conn = loop {
-                    match VsockStream::connect(cid, APP_LOG_PORT).await {
-                        Ok(conn) => break conn,
-
-                        // TODO: improve the polling frequency / backoff / timeout
-                        Err(_) => {
-                            tokio::time::sleep(LOG_VSOCK_RETRY_INTERVAL).await;
-                        }
+                let conn = match connect_to_odyn_log_stream(cid).await {
+                    Ok(conn) => conn,
+                    Err(err) => {
+                        error!("{err:#}");
+                        return;
                     }
                 };
 
@@ -532,7 +533,9 @@ impl Enclave {
     async fn attach_debug_console(&mut self, enclave_id: &str) -> Result<()> {
         info!("attaching to debug console");
 
-        let stdout = self.cli.console(enclave_id).await?;
+        let console = self.cli.console(enclave_id).await?;
+        let (child, stdout) = console.into_parts()?;
+        self.debug_console = Some(child);
 
         self.tasks.push(tokio::task::spawn(async move {
             if let Err(e) = utils::log_lines_from_stream("nitro-cli::console", stdout).await {
@@ -551,10 +554,20 @@ impl Enclave {
             debug!("no enclave to stop");
         }
 
+        self.stop_debug_console().await;
         self.runtime_vsock = None;
         self.abort_tasks().await;
 
         Ok(())
+    }
+
+    async fn stop_debug_console(&mut self) {
+        if let Some(console) = &mut self.debug_console
+            && let Err(err) = stop_child_process(console, "nitro-cli debug console").await
+        {
+            error!("error stopping nitro-cli debug console: {err:#}");
+        }
+        self.debug_console = None;
     }
 
     async fn abort_tasks(&mut self) {
@@ -568,6 +581,50 @@ impl Enclave {
             };
         }
     }
+}
+
+async fn connect_to_odyn_log_stream(cid: u32) -> Result<VsockStream> {
+    let mut delay = LOG_VSOCK_INITIAL_RETRY_INTERVAL;
+
+    for attempt in 1..=LOG_VSOCK_RETRY_LIMIT {
+        match VsockStream::connect(cid, APP_LOG_PORT).await {
+            Ok(conn) => return Ok(conn),
+            Err(err) if attempt == LOG_VSOCK_RETRY_LIMIT => {
+                return Err(anyhow!(
+                    "failed to connect to enclave log port after {} attempts: {}",
+                    LOG_VSOCK_RETRY_LIMIT,
+                    err
+                ));
+            }
+            Err(err) => {
+                debug!(
+                    "enclave log port not ready yet (attempt {}/{}): {}; retrying in {:?}",
+                    attempt, LOG_VSOCK_RETRY_LIMIT, err, delay
+                );
+                tokio::time::sleep(delay).await;
+                delay = next_log_vsock_retry_delay(delay);
+            }
+        }
+    }
+
+    unreachable!("log stream retry loop always returns within the configured retry budget")
+}
+
+fn next_log_vsock_retry_delay(current: Duration) -> Duration {
+    current.saturating_mul(2).min(LOG_VSOCK_MAX_RETRY_INTERVAL)
+}
+
+async fn stop_child_process(child: &mut tokio::process::Child, what: &str) -> Result<()> {
+    if let Some(status) = child.try_wait()? {
+        debug!("{what} already exited with status {status}");
+        return Ok(());
+    }
+
+    child
+        .kill()
+        .await
+        .map_err(|err| anyhow!("failed to terminate {what}: {err}"))?;
+    Ok(())
 }
 
 fn annotate_host_vsock_bind_error(err: anyhow::Error, binding: String) -> anyhow::Error {
@@ -669,6 +726,8 @@ mod tests {
     use crate::nitro_cli::NitroCliCommandFailure;
     use crate::runtime_vsock::RuntimeHostVsockPorts;
     use std::os::unix::process::ExitStatusExt;
+    use std::process::Stdio;
+    use tokio::process::Command;
 
     #[test]
     fn managed_cid_conflict_detection_requires_nitro_cli_stderr_match() {
@@ -707,6 +766,35 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("managed CID conflict retries"));
+    }
+
+    #[test]
+    fn log_stream_retry_delay_caps_at_maximum() {
+        assert_eq!(
+            next_log_vsock_retry_delay(LOG_VSOCK_INITIAL_RETRY_INTERVAL),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            next_log_vsock_retry_delay(LOG_VSOCK_MAX_RETRY_INTERVAL),
+            LOG_VSOCK_MAX_RETRY_INTERVAL
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_child_process_kills_and_reaps_child() {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep child");
+
+        stop_child_process(&mut child, "test child")
+            .await
+            .expect("stop child");
+
+        assert!(child.try_wait().expect("query child state").is_some());
     }
 }
 

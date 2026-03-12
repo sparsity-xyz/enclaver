@@ -13,7 +13,9 @@ pub struct AuxApiService {
 impl AuxApiService {
     pub async fn start(config: &Configuration) -> Result<Self> {
         let task = if let Some(port) = config.aux_api_port() {
-            let api_port = config.api_port().expect("aux_api_port implies api_port");
+            let api_port = config.api_port().ok_or_else(|| {
+                anyhow::anyhow!("invariant violated: aux_api_port requires api_port")
+            })?;
             info!("Starting Aux API on port {port} (proxying to API on port {api_port})");
 
             let srv = HttpServer::bind(port).await?;
