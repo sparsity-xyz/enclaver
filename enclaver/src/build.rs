@@ -499,8 +499,16 @@ mod tests {
             "nitro-cli image should rebuild the official Nitro Enclaves blobs from source"
         );
         assert!(
-            contents.contains("CONFIG_FUSE_FS"),
-            "nitro-cli image should validate that the enclave kernel enables FUSE"
+            contents.contains("CONFIG_FUSE_FS=y"),
+            "nitro-cli image should enable FUSE in the rebuilt enclave kernel config"
+        );
+        assert!(
+            contents.contains("sed -i -E"),
+            "nitro-cli image should rewrite the upstream kernel config before rebuilding blobs"
+        );
+        assert!(
+            contents.contains("CONFIG_FUSE_FS=y"),
+            "nitro-cli image should hardcode the FUSE config toggle in the build step"
         );
     }
 

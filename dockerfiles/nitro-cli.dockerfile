@@ -19,7 +19,23 @@ RUN git clone --depth 1 --branch "${NITRO_BOOTSTRAP_REF}" \
 
 WORKDIR /build/sdk-bootstrap
 
-RUN nix-build -A all
+# Nitro CLI's build-enclave flow bakes whatever kernel blobs live under
+# /usr/share/nitro_enclaves/blobs into the EIF. The upstream bootstrap repo
+# still ships microvm kernel configs with FUSE disabled, which breaks odyn's
+# host-backed storage mounts inside the enclave. We patch the upstream config
+# files before rebuilding so the generated bzImage/Image artifacts include
+# CONFIG_FUSE_FS=y for both supported architectures.
+#
+# The sed expression handles both upstream forms we may encounter:
+# - "# CONFIG_FUSE_FS is not set"
+# - "CONFIG_FUSE_FS=<value>"
+# and normalizes either one to "CONFIG_FUSE_FS=y".
+RUN for cfg in kernel/microvm-kernel-config-x86_64 kernel/microvm-kernel-config-aarch64; do \
+        grep -Eq '^# CONFIG_FUSE_FS is not set$|^CONFIG_FUSE_FS=' "${cfg}"; \
+        sed -i -E 's|^# CONFIG_FUSE_FS is not set$|CONFIG_FUSE_FS=y|; s|^CONFIG_FUSE_FS=.*$|CONFIG_FUSE_FS=y|' "${cfg}"; \
+        grep -Eq '^CONFIG_FUSE_FS=y$' "${cfg}"; \
+    done \
+    && nix-build -A all
 
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 
@@ -30,8 +46,11 @@ RUN dnf install -y \
     && dnf clean all \
     && rm -rf /var/cache/yum /var/cache/dnf
 
-# Replace the package-provided blobs with a freshly built, FUSE-enabled set so
-# build-enclave produces EIF kernels that can mount hostfs via /dev/fuse.
+# Replace the package-provided blobs with the rebuilt set from the patched
+# bootstrap stage. This is the point where we swap Nitro CLI off the stock AWS
+# blobs and onto our FUSE-enabled kernel/init/linuxkit artifacts so every later
+# "nitro-cli build-enclave" invocation in this image produces EIFs with FUSE
+# support available inside the enclave.
 COPY --from=nitro_bootstrap /build/sdk-bootstrap/result/. /tmp/nitro-bootstrap/
 
 RUN arch="$(uname -m)" \

@@ -23,7 +23,7 @@ Relevant files:
 - `dockerfiles/nitro-cli.dockerfile`
 - `scripts/build-and-publish-nitro-cli.sh`
 
-The repository now publishes a self-hosted `nitro-cli` image through the manual `nitro-cli.yaml` workflow, and Enclaver consumes that image by default. The nitro-cli build replaces the stock enclave blobs with a FUSE-enabled kernel and matching bootstrap artifacts.
+The repository now publishes a self-hosted `nitro-cli` image through the manual `nitro-cli.yaml` workflow, and Enclaver consumes that image by default. The nitro-cli build rewrites the upstream kernel config to set `CONFIG_FUSE_FS=y`, then replaces the stock enclave blobs with rebuilt bootstrap artifacts.
 
 ### Odyn image
 

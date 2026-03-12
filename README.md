@@ -69,6 +69,7 @@ See [docs/http_proxy_support_guidance_for_enclave_applications.md](docs/http_pro
 ### Development
 - [Base Images](docs/base-images.md) — What the odyn / sleeve base images contain and how to inspect them
 - [Building Images](docs/BUILDING_IMAGES.md) — Local build flow for odyn, sleeve, and nitro-cli images
+- [Nitro CLI FUSE Image](docs/nitro_cli_fuse_image.md) — Why and how the Nitro CLI image rebuilds enclave blobs with FUSE enabled
 - [CI and Release Workflows](docs/ci.md) — How repository CI and release pipelines are structured
 
 

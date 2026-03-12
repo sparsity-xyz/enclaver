@@ -123,6 +123,9 @@ How those Dockerfiles work:
 
 This repository includes `dockerfiles/nitro-cli.dockerfile`, `scripts/build-and-publish-nitro-cli.sh`, and `scripts/validate-nitro-cli-image.sh`.
 
+Detailed background on the Nitro CLI kernel/blob rebuild flow lives in
+[`docs/nitro_cli_fuse_image.md`](nitro_cli_fuse_image.md).
+
 Build it locally:
 
 ```bash
@@ -135,7 +138,7 @@ Or use the helper script:
 ./scripts/build-and-publish-nitro-cli.sh --tag latest
 ```
 
-The helper script now builds a local validation image, checks that the rebuilt enclave kernel exposes `CONFIG_FUSE_FS`, performs a smoke `nitro-cli build-enclave`, and only then pushes the multi-arch image. Enclaver uses `public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest` by default.
+The nitro-cli Dockerfile now rewrites the upstream kernel config in place to set `CONFIG_FUSE_FS=y` before rebuilding the official Nitro Enclaves blobs. The helper script then builds a local validation image, checks that the rebuilt enclave kernel exposes `CONFIG_FUSE_FS`, performs a smoke `nitro-cli build-enclave`, and only then pushes the multi-arch image. Enclaver uses `public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest` by default.
 
 ## Troubleshooting
 
