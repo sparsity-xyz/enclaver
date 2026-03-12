@@ -208,6 +208,12 @@ Default images from `enclaver/src/build.rs`:
 - Odyn: `public.ecr.aws/d4t4u8d2/sparsity-ai/odyn:latest`
 - Sleeve: `public.ecr.aws/d4t4u8d2/sparsity-ai/sleeve:latest`
 
+Current published platforms:
+
+- Nitro CLI: `linux/amd64`
+- Odyn: `linux/amd64`
+- Sleeve: `linux/amd64`
+
 Release image layout:
 
 ```text

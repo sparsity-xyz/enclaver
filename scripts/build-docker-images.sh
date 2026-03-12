@@ -69,7 +69,10 @@ case $local_arch in
         rust_target="x86_64-unknown-linux-musl"
         ;;
     aarch64)
-        rust_target="aarch64-unknown-linux-musl"
+        log_error "scripts/build-docker-images.sh currently requires an x86_64 host."
+        echo "The default sleeve Dockerfiles copy nitro-cli from our self-hosted nitro-cli image,"
+        echo "and that image is currently published only for linux/amd64."
+        exit 1
         ;;
     *)
         log_error "Unsupported architecture: $local_arch"

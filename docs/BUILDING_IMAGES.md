@@ -31,13 +31,17 @@ From the repository root:
 
 This default mode:
 
-- detects the host architecture
-- builds `odyn` and `enclaver-run` for the matching musl target
+- currently requires an `x86_64` host
+- builds `odyn` and `enclaver-run` for `x86_64-unknown-linux-musl`
 - uses `dockerfiles/odyn-dev.dockerfile`
 - uses `dockerfiles/sleeve-dev.dockerfile`
 - produces:
   - `odyn-dev:latest`
   - `sleeve-dev:latest`
+
+The helper is currently `x86_64`-only because the default Sleeve Dockerfiles
+copy `nitro-cli` from the self-hosted Nitro CLI image, and that image is
+currently published only for `linux/amd64`.
 
 Release-style local tags:
 
@@ -56,7 +60,7 @@ This produces:
 
 1. maps host architecture to:
    - `x86_64` -> `x86_64-unknown-linux-musl`
-   - `aarch64` -> `aarch64-unknown-linux-musl`
+   - `aarch64` -> unsupported in the default helper
 2. runs:
    ```bash
    cross build --target <target> --features run_enclave,odyn [--release]
@@ -88,13 +92,11 @@ For release binaries, switch `debug` to `release` and add `--release` to `cross 
 
 The release Dockerfiles are designed around the layout used by `.github/workflows/release.yaml`.
 
-Expected artifact layout before building images:
+Expected artifact layout before building the currently published release images:
 
 ```text
 ./amd64/odyn
 ./amd64/enclaver-run
-./arm64/odyn
-./arm64/enclaver-run
 ```
 
 Local release-image build example:
@@ -103,13 +105,13 @@ Local release-image build example:
 docker buildx build \
   --file dockerfiles/odyn-release.dockerfile \
   --build-context artifacts=. \
-  --platform linux/amd64,linux/arm64 \
+  --platform linux/amd64 \
   -t odyn:local .
 
 docker buildx build \
   --file dockerfiles/sleeve-release.dockerfile \
   --build-context artifacts=. \
-  --platform linux/amd64,linux/arm64 \
+  --platform linux/amd64 \
   -t sleeve:local .
 ```
 
@@ -118,6 +120,8 @@ How those Dockerfiles work:
 - `odyn-release.dockerfile` copies `${TARGETARCH}/odyn` from the `artifacts` build context
 - `sleeve-release.dockerfile` copies `${TARGETARCH}/enclaver-run` from the `artifacts` build context
 - `sleeve-release.dockerfile` also copies `nitro-cli` and required runtime libraries from the default Nitro CLI image
+- `odyn-release.dockerfile` is currently published only for `linux/amd64`
+- `sleeve-release.dockerfile` is currently published only for `linux/amd64`
 
 ## Nitro CLI image
 
