@@ -11,6 +11,9 @@ use uuid::Uuid;
 
 use crate::manifest::Manifest;
 
+// Each runtime --mount binding points at a host state directory. We keep the
+// loopback image and lock state under a hidden metadata directory there so the
+// same host path can be reused across runs to preserve contents.
 const HOSTFS_META_DIR: &str = ".enclaver-hostfs";
 pub const CONTAINER_HOSTFS_ROOT: &str = "/mnt/enclaver-hostfs-data";
 
@@ -228,6 +231,9 @@ fn prepare_loopback_mount(request: LoopbackMountRequest) -> Result<PreparedLoopb
         )
     })?;
 
+    // The disk image is the durable backing store for this mount. If it already
+    // exists at the requested size we reuse it; otherwise we create and format
+    // a fresh ext4 filesystem.
     let image_path = meta_dir.join("disk.img");
     let expected_bytes = request
         .size_mb

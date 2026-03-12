@@ -76,6 +76,8 @@ impl Sleeve {
         }
 
         if !loopback_mount_requests.is_empty() {
+            // Prepare or reuse the loopback-backed host directories before the
+            // Sleeve container starts, then bind-mount them in for hostfs proxying.
             self.hostfs_mounts = tokio::task::spawn_blocking(move || {
                 prepare_loopback_mounts(&loopback_mount_requests)
             })

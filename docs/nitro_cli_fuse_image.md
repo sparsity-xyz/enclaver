@@ -6,13 +6,18 @@ enable FUSE, and how the rebuilt blobs are swapped into the final image.
 
 ## Why We Do This
 
-Enclaver supports host-backed persistent mounts inside the enclave. That flow
-depends on FUSE being available inside the EIF kernel so `odyn` can mount
-storage through `/dev/fuse`.
+Enclaver supports host-backed directory mounts inside the enclave. This is the
+same capability Nova Platform describes as a Host-Backed Temporary Directory
+Mount. In Enclaver, the same mechanism can be temporary or persistent depending
+on whether you reuse the bound host state directory across runs.
+
+That flow depends on FUSE being available inside the EIF kernel so `odyn` can
+mount host-backed storage through `/dev/fuse`.
 
 The stock Nitro CLI packages ship prebuilt enclave blobs whose kernel config
 does not enable `CONFIG_FUSE_FS`. If we build EIFs from those defaults, the
-resulting enclave boots without FUSE support and host-backed mounts fail.
+resulting enclave boots without FUSE support and the hostfs file proxy cannot
+be mounted inside the enclave.
 
 Because `nitro-cli build-enclave` reads its kernel and bootstrap artifacts from
 the Nitro CLI image itself, the fix has to happen in the Nitro CLI image build

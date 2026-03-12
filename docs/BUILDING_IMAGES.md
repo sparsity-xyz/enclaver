@@ -139,6 +139,7 @@ Or use the helper script:
 ```
 
 The nitro-cli Dockerfile now rewrites the upstream kernel config in place to set `CONFIG_FUSE_FS=y` before rebuilding the official Nitro Enclaves blobs. The helper script then builds a local `linux/amd64` validation image, checks that the rebuilt enclave kernel exposes `CONFIG_FUSE_FS`, performs a smoke `nitro-cli build-enclave`, and only then pushes the `linux/amd64` image. Enclaver uses `public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest` by default.
+That self-hosted Nitro CLI image is what gives Enclaver EIFs the FUSE support required for host-backed directory mounts and the hostfs file proxy.
 
 ## Troubleshooting
 

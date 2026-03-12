@@ -39,7 +39,7 @@ Enclave side:
 
 1. `/sbin/odyn` starts as PID 1
 2. it brings up loopback and seeds RNG from NSM
-3. it mounts any configured host-backed persistent directories before the app starts
+3. it mounts any configured host-backed directories before the app starts
 4. it starts the enclave-side egress proxy if enabled
 5. it starts the clock-sync client service; clock sync is default-on unless explicitly disabled
 6. it starts Helios in the background when configured
@@ -70,7 +70,7 @@ Inside the enclave, Odyn runs two kinds of things:
 
 Standalone runtime services:
 
-- host-backed persistent mounts
+- host-backed directory mounts via the hostfs file proxy
 - ingress proxy
 - egress proxy
 - clock sync
@@ -120,7 +120,7 @@ Odyn clock-sync client
 -> host time server in enclaver-run
 ```
 
-Host-backed mount:
+Host-backed directory mount:
 
 ```text
 application file API

@@ -163,12 +163,14 @@ storage:
       accept_plaintext: true # [ODYN] Allow reading plaintext objects when present.
                              # Note: mode=kms requires kms_integration.enabled=true.
 
-  # Host-backed mounts using a dedicated loopback image per mount.
+  # Host-backed directory mounts using a dedicated loopback image per mount.
+  # Reusing the same host state directory preserves contents across runs; deleting
+  # it resets the mount to an empty filesystem.
   # Runtime behavior:
   # - `enclaver run --mount <name>=<host_state_dir>` creates or reuses a fixed-size
   #   loopback image under that host state directory.
   # - The mounted filesystem is bind-mounted into the Sleeve container.
-  # - `enclaver-run` serves it over a hostfs vsock proxy.
+  # - `enclaver-run` serves it over a hostfs file proxy on vsock.
   # - `odyn` mounts it inside the enclave before the application starts.
   mounts:
     - name: "appdata"        # [BUILD] Stable runtime mount identifier.

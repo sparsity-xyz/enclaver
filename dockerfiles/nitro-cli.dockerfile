@@ -24,7 +24,7 @@ WORKDIR /build/sdk-bootstrap
 # Nitro CLI's build-enclave flow bakes whatever kernel blobs live under
 # /usr/share/nitro_enclaves/blobs into the EIF. The upstream bootstrap repo
 # still ships microvm kernel configs with FUSE disabled, which breaks odyn's
-# host-backed storage mounts inside the enclave. We patch the upstream config
+# host-backed directory mounts inside the enclave. We patch the upstream config
 # files before rebuilding so the generated bzImage/Image artifacts include
 # CONFIG_FUSE_FS=y for both supported architectures.
 #

@@ -41,7 +41,7 @@ The codebase has three execution domains:
   - manifest schema
   - validation rules
   - effective defaults such as default-on `clock_sync`
-  - `storage.mounts[]` validation for host-backed persistent directories
+  - `storage.mounts[]` validation for host-backed directory mounts
 
 ### Host/runtime path
 
@@ -50,7 +50,7 @@ The codebase has three execution domains:
   - mounts `/dev/nitro_enclaves`
   - sets `privileged: true`
   - wires `-p/--publish` host port mappings
-  - prepares loopback-backed persistent mount images and bind-mounts them into Sleeve
+  - prepares loopback-backed host mount images and bind-mounts them into Sleeve
 
 - `enclaver/src/hostfs.rs`
   - resolves `--mount` runtime bindings against `storage.mounts[]`
@@ -96,7 +96,7 @@ The codebase has three execution domains:
   - sets uppercase and lowercase proxy env vars
 
 - `enclaver/src/bin/odyn/fs_mount.rs`
-  - enclave-side FUSE mount service for host-backed persistent directories
+  - enclave-side FUSE mount service for host-backed directory mounts
   - probes hostfs proxies, ensures `/dev/fuse` exists, and mounts each configured path
 
 - `enclaver/src/bin/odyn/clock_sync.rs`

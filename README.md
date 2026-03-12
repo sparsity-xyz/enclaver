@@ -16,7 +16,7 @@ Run this command to install the latest version of the `enclaver` CLI tool:
 
 See [examples/hn-fetcher/readme.md](examples/hn-fetcher/readme.md) for a quick start example of building and running an enclave application with Enclaver.
 
-If your application needs a persistent directory inside the enclave, declare a mount in `enclaver.yaml` and bind it at runtime:
+If your application needs a host-backed working directory inside the enclave, declare a mount in `enclaver.yaml` and bind it at runtime:
 
 ```yaml
 storage:
@@ -31,7 +31,7 @@ storage:
 sudo enclaver run -f enclaver.yaml --mount appdata=/var/lib/my-service/appdata
 ```
 
-Enclaver will create or reuse `/var/lib/my-service/appdata/.enclaver-hostfs/disk.img` and mount it inside the enclave at `/mnt/appdata`. For the full design and security model, see [Host-Backed Persistent Mounts](docs/host_backed_mounts_design.md).
+Enclaver will create or reuse `/var/lib/my-service/appdata/.enclaver-hostfs/disk.img` and mount it inside the enclave at `/mnt/appdata`. If you reuse the same host state directory across runs, the contents persist; if you discard that host directory, the mount behaves like a host-backed temporary directory. For the full design and security model, see [Host-Backed Directory Mounts](docs/host_backed_mounts_design.md).
 
 ## Important: HTTP(S) Proxy Support for Enclave Apps
 
@@ -59,7 +59,7 @@ See [docs/http_proxy_support_guidance_for_enclave_applications.md](docs/http_pro
 
 ### Usage
 - [Enclaver CLI Reference](docs/enclaver-cli.md) — CLI commands, flags, and runtime override behavior
-- [Host-Backed Persistent Mounts](docs/host_backed_mounts_design.md) — Persistent enclave directories backed by per-mount loopback images on the parent instance
+- [Host-Backed Directory Mounts](docs/host_backed_mounts_design.md) — Host-backed directory mounts exposed through a hostfs file proxy; reuse the same host state dir to persist data across runs
 - [Helios RPC Integration](docs/helios_rpc.md) — Trustless Ethereum / OP Stack light-client RPC inside the enclave
 - [Port Handling](docs/port_handling.md) — End-to-end port flow across build, sleeve, odyn, and ingress
 

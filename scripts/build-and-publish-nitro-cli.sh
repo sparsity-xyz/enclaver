@@ -12,6 +12,11 @@
 #   5. Builds the nitro-cli image for linux/amd64
 #   6. Pushes the amd64 image to ECR
 #
+# We rebuild Nitro CLI because the stock AWS blobs do not enable FUSE in the
+# enclave kernel, which means Odyn cannot mount host-backed directories through
+# the hostfs file proxy. Publishing is currently limited to linux/amd64 because
+# the bootstrap build is not yet reliable in the arm64 release path.
+#
 # Prerequisites:
 #   - AWS CLI configured with appropriate credentials
 #   - Docker with buildx support

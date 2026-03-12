@@ -261,6 +261,9 @@ impl Enclave {
             return Ok(());
         };
 
+        // Mount order in the manifest defines the hostfs vsock port assignment.
+        // Odyn uses the same deterministic mapping when it mounts the enclave-side
+        // FUSE filesystems, so both sides must walk the list in the same order.
         for (index, mount) in mounts.iter().enumerate() {
             let port = HOSTFS_VSOCK_PORT_BASE
                 .checked_add(index as u32)

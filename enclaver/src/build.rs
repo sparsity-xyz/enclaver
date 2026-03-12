@@ -614,6 +614,53 @@ mod tests {
     }
 
     #[test]
+    fn documentation_describes_current_hostfs_and_nitro_cli_model() {
+        let root = repo_root();
+        let read = |rel_path: &str| {
+            let path = root.join(rel_path);
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"))
+        };
+
+        let readme = read("README.md");
+        assert!(
+            readme.contains("Host-Backed Directory Mounts"),
+            "README should use the current host-backed directory mount terminology"
+        );
+
+        let hostfs_doc = read("docs/host_backed_mounts_design.md");
+        assert!(
+            hostfs_doc.contains("Host-Backed Temporary Directory"),
+            "hostfs design doc should note the Nova-style temporary-directory terminology"
+        );
+        assert!(
+            hostfs_doc.contains("Whether the directory behaves as \"temporary\" or \"persistent\""),
+            "hostfs design doc should explain that persistence depends on host_state_dir reuse"
+        );
+
+        let cli_doc = read("docs/enclaver-cli.md");
+        assert!(
+            cli_doc.contains("hostfs file proxy"),
+            "CLI docs should explain that --mount uses the hostfs file proxy"
+        );
+
+        let base_images_doc = read("docs/base-images.md");
+        assert!(
+            base_images_doc.contains("linux/amd64"),
+            "base image docs should state that Nitro CLI publishing is linux/amd64 only"
+        );
+
+        let nitro_cli_doc = read("docs/nitro_cli_fuse_image.md");
+        assert!(
+            nitro_cli_doc.contains("hostfs file proxy"),
+            "nitro-cli doc should explain why FUSE is needed for the hostfs file proxy"
+        );
+        assert!(
+            nitro_cli_doc.contains("linux/amd64"),
+            "nitro-cli doc should document the current publish architecture"
+        );
+    }
+
+    #[test]
     fn documentation_only_keeps_the_upstream_repo_link() {
         let root = repo_root();
         let mut files = Vec::new();

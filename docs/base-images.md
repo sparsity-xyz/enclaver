@@ -24,6 +24,7 @@ Relevant files:
 - `scripts/build-and-publish-nitro-cli.sh`
 
 The repository now publishes a self-hosted `nitro-cli` image through the manual `nitro-cli.yaml` workflow, and Enclaver consumes that image by default. The nitro-cli build rewrites the upstream kernel config to set `CONFIG_FUSE_FS=y`, then replaces the stock enclave blobs with rebuilt bootstrap artifacts.
+That rebuilt kernel support is what allows Odyn to mount host-backed directories through `/dev/fuse` inside the enclave. The publish flow for this image is manual and currently targets `linux/amd64` only.
 
 ### Odyn image
 
