@@ -70,7 +70,6 @@ impl NitroCLI {
             error!("nitro-cli failed ({})", output.status);
 
             let stderr = String::from_utf8(output.stderr)?;
-            error!("stderr:\n{}", stderr);
 
             for path in stderr.lines().filter_map(|line| {
                 line.strip_prefix(
@@ -376,6 +375,7 @@ old images in your local Docker engine."#
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::ExitStatusExt;
 
     #[test]
     fn test_detect_known_issues() {
@@ -405,5 +405,19 @@ mod tests {
         assert!(!stderr_mentions_cid_conflict(
             "failed to allocate memory for enclave"
         ));
+    }
+
+    #[test]
+    fn test_command_failure_display_includes_stderr() {
+        let err = NitroCliCommandFailure::new(
+            "run-enclave".to_string(),
+            ExitStatus::from_raw(1 << 8),
+            "allocator error: CID 22 already used".to_string(),
+        );
+
+        assert!(
+            err.to_string()
+                .contains("allocator error: CID 22 already used")
+        );
     }
 }

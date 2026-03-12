@@ -478,6 +478,7 @@ impl Enclave {
 
     async fn await_exit(cid: u32, status_port: u32) -> Result<EnclaveExitStatus> {
         let mut failed_attempts = 0;
+        let mut reconnects_after_disconnect = 0u32;
 
         loop {
             let conn = match VsockStream::connect(cid, status_port).await {
@@ -495,6 +496,12 @@ impl Enclave {
                 }
             };
 
+            if reconnects_after_disconnect > 0 {
+                warn!(
+                    "reconnected to enclave status port after {} unexpected disconnect(s)",
+                    reconnects_after_disconnect
+                );
+            }
             debug!("connected to enclave status port");
 
             let mut framed = FramedRead::new(conn, LinesCodec::new_with_max_length(1024));
@@ -532,6 +539,7 @@ impl Enclave {
                 }
             }
 
+            reconnects_after_disconnect = reconnects_after_disconnect.saturating_add(1);
             error!("enclave status port closed unexpectedly");
         }
     }

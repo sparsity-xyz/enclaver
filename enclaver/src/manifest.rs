@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::io::Read as _;
 use std::path::PathBuf;
 
 use crate::constants::KMS_REGISTRY_HELIOS_PORT;
@@ -625,13 +624,12 @@ pub async fn load_manifest<P: AsRef<Path>>(path: P) -> Result<Manifest> {
 }
 
 pub fn load_manifest_sync<P: AsRef<Path>>(path: P) -> Result<Manifest> {
-    let mut buf = Vec::new();
     if path.as_ref() == Path::new("-") {
-        std::io::stdin().read_to_end(&mut buf)?;
-    } else {
-        buf = std::fs::read(&path)
-            .map_err(|err| anyhow!("failed to open {}: {err}", path.as_ref().display()))?;
+        bail!("stdin manifests are not supported in synchronous mode");
     }
+
+    let buf = std::fs::read(&path)
+        .map_err(|err| anyhow!("failed to open {}: {err}", path.as_ref().display()))?;
 
     parse_manifest(&buf)
         .map_err(|e| anyhow!("invalid configuration in {}: {e}", path.as_ref().display()))
@@ -641,11 +639,17 @@ pub fn load_manifest_sync<P: AsRef<Path>>(path: P) -> Result<Manifest> {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::manifest::parse_manifest;
+    use crate::manifest::{load_manifest_sync, parse_manifest};
 
     #[test]
     fn test_parse_manifest_with_unknown_fields() {
         assert!(parse_manifest(br#"foo: "bar""#).is_err());
+    }
+
+    #[test]
+    fn test_load_manifest_sync_rejects_stdin() {
+        let err = load_manifest_sync("-").unwrap_err().to_string();
+        assert!(err.contains("stdin manifests are not supported in synchronous mode"));
     }
 
     #[test]
