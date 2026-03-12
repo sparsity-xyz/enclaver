@@ -53,10 +53,27 @@ jobs:
       - name: Install Clippy
         run: rustup component add clippy
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Cache Cargo registry and git data
+        uses: actions/cache@v4
         with:
-          workspaces: "enclaver -> target"
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: ${{ runner.os }}-cargo-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUSTUP_TOOLCHAIN }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Cache Rust target directory
+        uses: actions/cache@v4
+        with:
+          path: enclaver/target
+          key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-clippy-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-clippy-
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-
 
       - name: Check with default features
         env:
@@ -98,10 +115,28 @@ jobs:
       - name: Install Rust Toolchain
         run: rustup toolchain install $RUSTUP_TOOLCHAIN
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Cache Cargo registry and git data
+        uses: actions/cache@v4
         with:
-          workspaces: "enclaver -> target"
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: ${{ runner.os }}-cargo-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUSTUP_TOOLCHAIN }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Cache Rust target directory
+        uses: actions/cache@v4
+        with:
+          path: enclaver/target
+          key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-${{ matrix.feature_set }}-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-${{ matrix.feature_set }}-
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-
 
       - name: Run tests (${{ matrix.feature_set }})
         run: |
