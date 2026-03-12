@@ -9,18 +9,20 @@ This is the **Sparsity edition** of Enclaver. It significantly extends the origi
 
 ## Enclaver Highlights
 
-- **Secure Internal API**: Gives enclave apps built-in APIs for attestation, randomness, signing, encryption, and storage operations, so application code can call localhost HTTP endpoints instead of integrating the AWS NSM SDK directly.
-- **Ingress and egress control**: Routes inbound traffic into the enclave and outbound HTTP/HTTPS traffic through explicit proxy and policy layers.
-- **Host-backed storage**: Exposes host-backed directory mounts inside the enclave as normal filesystem paths for application code.
-- **Runtime supervision**: Starts the app, streams logs, reports exit status, and keeps the enclave wall clock synchronized with the host.
-- **Ethereum signing**: Adds secp256k1-based signing flows for enclave applications and internal APIs.
-- **Trustless Helios RPC**: Runs Helios light-client RPC inside the enclave for Ethereum and OP Stack workloads.
-- **S3-backed storage**: Supports encrypted object storage flows for enclave applications.
-- **KMS-backed key management**: Integrates external KMS-backed signing and derivation flows into the enclave runtime.
+- **Secure Internal API**: Gives enclave apps built-in APIs for attestation, randomness, signing, encryption, and storage operations, so application code can call localhost HTTP endpoints instead of integrating the AWS NSM SDK directly. See [Internal API Reference](docs/internal_api.md) and [Internal API Mock Service](docs/internal_api_mockup.md).
+- **Ingress and egress control**: Routes inbound traffic into the enclave and outbound HTTP/HTTPS traffic through explicit proxy and policy layers. See [Enclaver CLI Reference](docs/enclaver-cli.md), [Port Handling](docs/port_handling.md), and [HTTP(S) Proxy Support Guidance](docs/http_proxy_support_guidance_for_enclave_applications.md).
+- **Host-backed storage**: Exposes host-backed directory mounts inside the enclave as normal filesystem paths for application code. See [Host-Backed Directory Mounts Guide](docs/host_backed_mounts_design.md).
+- **Runtime supervision**: Starts the app, streams logs, reports exit status, and keeps the enclave wall clock synchronized with the host. See [Odyn User Guide](docs/odyn.md), [Odyn Implementation Details](docs/odyn_details.md), and [Clock Drift & Time Sync](docs/nitro_enclave_clock_drift.md).
+- **Ethereum signing**: Adds secp256k1-based signing flows for enclave applications and internal APIs. See [Internal API Reference](docs/internal_api.md).
+- **Trustless Helios RPC**: Runs Helios light-client RPC inside the enclave for Ethereum and OP Stack workloads. See [Helios RPC Integration](docs/helios_rpc.md).
+- **S3-backed storage**: Supports encrypted object storage flows for enclave applications. See [Internal API Reference](docs/internal_api.md).
+- **KMS-backed key management**: Integrates external KMS-backed signing and derivation flows into the enclave runtime. See [Internal API Reference](docs/internal_api.md).
 
 ## Enclaver Runtime Architecture
 
 The diagram below shows the runtime component relationships across the host container, the enclave, Odyn, and the main integrations.
+
+For architecture details, see [Runtime Architecture](docs/architecture.md) and [Detailed Architecture](docs/enclaver-architecture.md).
 
 ![Enclaver runtime architecture](docs/img/diagram-enclaver-components.svg)
 
@@ -49,29 +51,9 @@ See [docs/http_proxy_support_guidance_for_enclave_applications.md](docs/http_pro
 
 ## Documentation
 
-### Architecture
-- [Runtime Architecture](docs/architecture.md) — Component overview, build/runtime flows, and what's inside vs outside the EIF
-- [Detailed Architecture](docs/enclaver-architecture.md) — Module-level code architecture reference
+Core feature docs are linked from [Enclaver Highlights](#enclaver-highlights). Additional references:
 
-### Odyn Supervisor
-- [Odyn User Guide](docs/odyn.md) — User-focused guide to Odyn modules and configuration
-- [Odyn Implementation Details](docs/odyn_details.md) — Deep dive into Odyn internals (for contributors)
-- [Clock Drift & Time Sync](docs/nitro_enclave_clock_drift.md) — Nitro Enclave clock behavior and Enclaver's default synchronization strategy
-
-### Internal API
-- [Internal API Reference](docs/internal_api.md) — Complete API endpoint documentation for attestation, signing, encryption
-- [Internal API Mock Service](docs/internal_api_mockup.md) — Local development without an enclave, includes Python wrapper
-
-### Usage
-- [Enclaver CLI Reference](docs/enclaver-cli.md) — CLI commands, flags, and runtime override behavior
-- [Host-Backed Directory Mounts Guide](docs/host_backed_mounts_design.md) — Configure `storage.mounts[]`, bind `--mount`, and understand the host-side `disk.img` layout
-- [Helios RPC Integration](docs/helios_rpc.md) — Trustless Ethereum / OP Stack light-client RPC inside the enclave
-- [Port Handling](docs/port_handling.md) — End-to-end port flow across build, sleeve, odyn, and ingress
-
-### Configuration
 - [enclaver.yaml Reference](docs/enclaver.yaml) — Complete manifest configuration with parameter usage annotations
-
-### Development
 - [Base Images](docs/base-images.md) — What the odyn / sleeve base images contain and how to inspect them
 - [Building Images](docs/BUILDING_IMAGES.md) — Local build flow for odyn, sleeve, and nitro-cli images
 - [Nitro CLI FUSE Image](docs/nitro_cli_fuse_image.md) — Why and how the Nitro CLI image rebuilds enclave blobs with FUSE enabled
