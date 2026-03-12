@@ -22,7 +22,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Parse MSRV
         run: sed -n 's/^rust-version = "\(.*\)"$/RUSTUP_TOOLCHAIN=\1/p' enclaver/Cargo.toml >> $GITHUB_ENV
@@ -55,7 +55,7 @@ jobs:
             rustflags: "--cfg=tokio_unstable -Dwarnings"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Parse MSRV
         run: sed -n 's/^rust-version = "\(.*\)"$/RUSTUP_TOOLCHAIN=\1/p' enclaver/Cargo.toml >> $GITHUB_ENV
@@ -116,7 +116,7 @@ jobs:
             features: "run_enclave,odyn"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Parse MSRV
         run: sed -n 's/^rust-version = "\(.*\)"$/RUSTUP_TOOLCHAIN=\1/p' enclaver/Cargo.toml >> $GITHUB_ENV

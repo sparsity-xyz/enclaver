@@ -20,7 +20,7 @@ jobs:
       NITRO_CLI_IMAGE: public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
