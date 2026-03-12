@@ -100,11 +100,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        feature_set:
-          - default
-          - run_enclave
-          - odyn
-          - run_enclave,odyn
+        include:
+          - id: default
+            features: ""
+          - id: run-enclave
+            features: "run_enclave"
+          - id: odyn
+            features: "odyn"
+          - id: run-enclave-odyn
+            features: "run_enclave,odyn"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -132,16 +136,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: enclaver/target
-          key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-${{ matrix.feature_set }}-${{ hashFiles('enclaver/Cargo.lock') }}
+          key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-${{ matrix.id }}-${{ hashFiles('enclaver/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-${{ matrix.feature_set }}-
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-${{ matrix.id }}-
             ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-test-
             ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-
 
-      - name: Run tests (${{ matrix.feature_set }})
+      - name: Run tests (${{ matrix.id }})
         run: |
-          if [[ "${{ matrix.feature_set }}" == "default" ]]; then
+          if [[ -z "${{ matrix.features }}" ]]; then
             cargo test --quiet --manifest-path enclaver/Cargo.toml
           else
-            cargo test --quiet --manifest-path enclaver/Cargo.toml --features="${{ matrix.feature_set }}"
+            cargo test --quiet --manifest-path enclaver/Cargo.toml --features="${{ matrix.features }}"
           fi
