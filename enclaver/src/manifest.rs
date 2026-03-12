@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::path::Path;
 use std::pin::Pin;
 use tokio::fs::File;
@@ -23,6 +23,8 @@ pub struct Manifest {
     pub defaults: Option<Defaults>,
     pub api: Option<Api>,
     pub aux_api: Option<AuxApi>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vsock_ports: Option<DeprecatedVsockPorts>,
     pub storage: Option<Storage>,
     pub kms_integration: Option<KmsIntegration>,
     pub helios_rpc: Option<HeliosRpc>,
@@ -104,6 +106,28 @@ pub struct Api {
 #[serde(deny_unknown_fields)]
 pub struct AuxApi {
     pub listen_port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub struct DeprecatedVsockPorts;
+
+impl<'de> Deserialize<'de> for DeprecatedVsockPorts {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let _ = serde_yaml::Value::deserialize(deserializer)?;
+        Ok(Self)
+    }
+}
+
+impl Serialize for DeprecatedVsockPorts {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_none()
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -547,6 +571,12 @@ fn parse_manifest(buf: &[u8]) -> Result<Manifest> {
 }
 
 fn validate_manifest_cross_constraints(manifest: &Manifest) -> Result<()> {
+    if manifest.vsock_ports.is_some() {
+        bail!(
+            "vsock_ports is no longer supported; remove it from the manifest because Enclaver now uses fixed VSOCK ports for status, app logs, and HTTP egress"
+        );
+    }
+
     if manifest.aux_api.is_some() && manifest.api.is_none() {
         bail!("aux_api requires api.listen_port because Aux API proxies the Internal API");
     }
@@ -1075,6 +1105,22 @@ aux_api:
 
         let err = parse_manifest(raw_manifest).unwrap_err().to_string();
         assert!(err.contains("aux_api requires api.listen_port"));
+    }
+
+    #[test]
+    fn test_parse_manifest_rejects_deprecated_vsock_ports() {
+        let raw_manifest = br#"
+version: v1
+name: "test-vsock-ports"
+target: "target-image:latest"
+sources:
+  app: "app-image:latest"
+vsock_ports:
+  status_port: 17001
+"#;
+
+        let err = parse_manifest(raw_manifest).unwrap_err().to_string();
+        assert!(err.contains("vsock_ports is no longer supported"));
     }
 
     #[test]

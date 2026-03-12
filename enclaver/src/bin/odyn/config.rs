@@ -161,6 +161,7 @@ mod tests {
                 defaults: None,
                 api: Some(Api { listen_port: 9000 }),
                 aux_api: None,
+                vsock_ports: None,
                 storage: None,
                 kms_integration: None,
                 helios_rpc: None,

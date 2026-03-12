@@ -222,7 +222,12 @@ impl Enclave {
             return Ok(());
         }
 
-        let proxy = HostHttpProxy::bind(HTTP_EGRESS_VSOCK_PORT)?;
+        let proxy = HostHttpProxy::bind(HTTP_EGRESS_VSOCK_PORT).map_err(|err| {
+            annotate_host_vsock_bind_conflict(
+                err,
+                format!("host egress proxy vsock port {}", HTTP_EGRESS_VSOCK_PORT),
+            )
+        })?;
         info!("egress proxy bound to vsock port {HTTP_EGRESS_VSOCK_PORT}");
         self.tasks.push(utils::spawn!("egress proxy", async move {
             proxy.serve().await;
@@ -266,7 +271,12 @@ impl Enclave {
                 continue;
             }
 
-            let proxy = HostFsProxy::bind(&mount.name, root, false, port)?;
+            let proxy = HostFsProxy::bind(&mount.name, root, false, port).map_err(|err| {
+                annotate_host_vsock_bind_conflict(
+                    err,
+                    format!("hostfs mount '{}' vsock port {}", mount.name, port),
+                )
+            })?;
 
             info!(
                 "starting hostfs proxy for mount '{}' on vsock port {}",
@@ -302,7 +312,14 @@ impl Enclave {
                     "enabled by default"
                 };
                 warn!(
-                    "clock sync is {source}, but failed to bind host time server on vsock port {CLOCK_SYNC_PORT}: {e}; continuing without host clock sync"
+                    "{}; continuing without host clock sync",
+                    annotate_host_vsock_bind_conflict(
+                        e.into(),
+                        format!(
+                            "clock sync host time server vsock port {} (clock sync is {source})",
+                            CLOCK_SYNC_PORT
+                        ),
+                    )
                 );
                 return Ok(());
             }
@@ -439,6 +456,19 @@ impl Enclave {
         }
 
         Ok(())
+    }
+}
+
+fn annotate_host_vsock_bind_conflict(err: anyhow::Error, binding: String) -> anyhow::Error {
+    if err
+        .chain()
+        .any(|cause| matches!(cause.downcast_ref::<std::io::Error>(), Some(io_err) if io_err.kind() == std::io::ErrorKind::AddrInUse))
+    {
+        anyhow!(
+            "failed to bind {binding}: another Enclaver instance may already be running on this EC2; concurrent multiple Enclaver instances on the same EC2 are not currently supported"
+        )
+    } else {
+        anyhow!("failed to bind {binding}: {err}")
     }
 }
 
