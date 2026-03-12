@@ -101,6 +101,13 @@ FULL_IMAGE_URI="${REGISTRY}/${REPO_NAME}"
 VALIDATION_IMAGE_URI="${FULL_IMAGE_URI}:validate-${TAG}"
 VALIDATION_PLATFORM="linux/amd64"
 PUBLISH_PLATFORM="linux/amd64"
+BUILD_CACHE_DIR="$(mktemp -d)"
+
+cleanup() {
+    rm -rf "${BUILD_CACHE_DIR}"
+}
+
+trap cleanup EXIT
 
 local_arch=$(uname -m)
 if [[ "${local_arch}" != "x86_64" ]]; then
@@ -165,18 +172,21 @@ docker buildx build \
     --platform "${VALIDATION_PLATFORM}" \
     --file "${DOCKERFILE_PATH}" \
     --tag "${VALIDATION_IMAGE_URI}" \
+    --cache-to "type=local,dest=${BUILD_CACHE_DIR},mode=max" \
     --load \
     .
 
 log_info "Validating nitro-cli image contents..."
 "${REPO_ROOT}/scripts/validate-nitro-cli-image.sh" "${VALIDATION_IMAGE_URI}"
 
-# Step 5: Build and push the amd64 image
-log_info "Building and pushing ${PUBLISH_PLATFORM} image..."
+# Step 5: Build and push the amd64 image, reusing the validated build cache so
+# the expensive bootstrap kernel rebuild does not run twice in one publish flow.
+log_info "Building and pushing ${PUBLISH_PLATFORM} image with cached layers..."
 docker buildx build \
     --platform "${PUBLISH_PLATFORM}" \
     --file "${DOCKERFILE_PATH}" \
     --tag "${FULL_IMAGE_URI}:${TAG}" \
+    --cache-from "type=local,src=${BUILD_CACHE_DIR}" \
     --push \
     .
 

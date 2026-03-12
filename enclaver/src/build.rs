@@ -531,6 +531,10 @@ mod tests {
             contents.contains("s|^CONFIG_FUSE_FS=.*$|CONFIG_FUSE_FS=y|"),
             "nitro-cli image should force any existing CONFIG_FUSE_FS setting to CONFIG_FUSE_FS=y"
         );
+        assert!(
+            contents.contains("test -s \"${kernel_image}\""),
+            "nitro-cli image should verify that the rebuilt kernel binary exists before publishing the blobs"
+        );
     }
 
     #[test]
@@ -571,6 +575,14 @@ mod tests {
             !contents.contains("linux/amd64,linux/arm64"),
             "nitro-cli workflow should not publish linux/arm64"
         );
+        assert!(
+            contents.contains("cache-from: type=gha,scope=nitro-cli-amd64"),
+            "nitro-cli workflow should reuse the validated build cache for the push build"
+        );
+        assert!(
+            contents.contains("cache-to: type=gha,mode=max,scope=nitro-cli-amd64"),
+            "nitro-cli workflow should export the nitro-cli build cache between validation and push"
+        );
     }
 
     #[test]
@@ -594,6 +606,14 @@ mod tests {
         assert!(
             !contents.contains("linux/amd64,linux/arm64"),
             "nitro-cli publish script should not publish linux/arm64"
+        );
+        assert!(
+            contents.contains("--cache-to \"type=local,dest=${BUILD_CACHE_DIR},mode=max\""),
+            "nitro-cli publish script should save the validated build cache before the push build"
+        );
+        assert!(
+            contents.contains("--cache-from \"type=local,src=${BUILD_CACHE_DIR}\""),
+            "nitro-cli publish script should reuse the validated build cache for the push build"
         );
     }
 

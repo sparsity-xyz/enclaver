@@ -60,10 +60,12 @@ RUN arch="$(uname -m)" \
     && case "$arch" in \
         x86_64) \
             src_dir="/tmp/nitro-bootstrap/x86_64"; \
+            kernel_image="/usr/share/nitro_enclaves/blobs/bzImage"; \
             kernel_cfg="/usr/share/nitro_enclaves/blobs/bzImage.config"; \
             ;; \
         aarch64) \
             src_dir="/tmp/nitro-bootstrap/aarch64"; \
+            kernel_image="/usr/share/nitro_enclaves/blobs/Image"; \
             kernel_cfg="/usr/share/nitro_enclaves/blobs/Image.config"; \
             ;; \
         *) \
@@ -73,6 +75,8 @@ RUN arch="$(uname -m)" \
     esac \
     && rm -rf /usr/share/nitro_enclaves/blobs/* \
     && cp -r "${src_dir}"/. /usr/share/nitro_enclaves/blobs/ \
+    && test -s "${kernel_image}" \
+    && test -s "${kernel_cfg}" \
     && test -s /usr/share/nitro_enclaves/blobs/init \
     && test -s /usr/share/nitro_enclaves/blobs/linuxkit \
     && test -s /usr/share/nitro_enclaves/blobs/cmdline \

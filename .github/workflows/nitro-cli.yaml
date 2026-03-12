@@ -31,6 +31,8 @@ jobs:
           context: .
           file: dockerfiles/nitro-cli.dockerfile
           platforms: linux/amd64
+          cache-from: type=gha,scope=nitro-cli-amd64
+          cache-to: type=gha,mode=max,scope=nitro-cli-amd64
           load: true
           tags: nitro-cli:validation
 
@@ -56,6 +58,8 @@ jobs:
           context: .
           file: dockerfiles/nitro-cli.dockerfile
           platforms: linux/amd64
+          cache-from: type=gha,scope=nitro-cli-amd64
+          cache-to: type=gha,mode=max,scope=nitro-cli-amd64
           push: true
           tags: ${{ env.NITRO_CLI_IMAGE }}:${{ github.event.inputs.tag }}
 
