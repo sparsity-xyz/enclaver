@@ -86,7 +86,7 @@ The codebase has three execution domains:
 
 - `enclaver/src/bin/odyn/config.rs`
   - runtime configuration helpers
-  - important detail: if `api` is enabled, Aux API also starts by default on `api.listen_port + 1`
+  - important detail: if `api` is enabled, Aux API is required for attestation and defaults to `api.listen_port + 1`
 
 - `enclaver/src/bin/odyn/enclave.rs`
   - loopback setup and RNG seeding from NSM

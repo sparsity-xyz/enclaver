@@ -24,8 +24,9 @@ aux_api:
 Current implementation details:
 
 - the Primary API is enabled only when `api.listen_port` is configured
-- if the Primary API is enabled, the Aux API also starts by default
-- if `aux_api.listen_port` is omitted, Aux API binds `api.listen_port + 1` when that value fits in `u16`
+- if the Primary API is enabled, the Aux API is required for attestation and starts as part of the same contract
+- if `aux_api.listen_port` is omitted, Aux API binds `api.listen_port + 1`
+- `api.listen_port=65535` is invalid unless `aux_api.listen_port` is set explicitly
 - there is no separate `enabled` flag for Aux API today
 
 The API request body limit is 10 MiB.

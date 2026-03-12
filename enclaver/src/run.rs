@@ -1,8 +1,8 @@
 use crate::constants::{
-    APP_LOG_PORT, CLOCK_SYNC_PORT, EIF_FILE_NAME, HOSTFS_VSOCK_PORT_BASE, HOSTFS_VSOCK_PORT_LIMIT,
-    HTTP_EGRESS_VSOCK_PORT, MANIFEST_FILE_NAME, RELEASE_BUNDLE_DIR, STATUS_PORT,
+    APP_LOG_PORT, CLOCK_SYNC_PORT, EIF_FILE_NAME, HTTP_EGRESS_VSOCK_PORT, MANIFEST_FILE_NAME,
+    RELEASE_BUNDLE_DIR, STATUS_PORT,
 };
-use crate::hostfs::CONTAINER_HOSTFS_ROOT;
+use crate::hostfs::{CONTAINER_HOSTFS_ROOT, hostfs_vsock_port};
 use crate::manifest::{Defaults, Manifest, load_manifest};
 use crate::utils;
 use anyhow::{Result, anyhow};
@@ -49,9 +49,6 @@ pub struct Enclave {
     debug_mode: bool,
     enclave_info: Option<EnclaveInfo>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
-    status_port: u32,
-    app_log_port: u32,
-    http_egress_vsock_port: u32,
 }
 
 impl Enclave {
@@ -109,24 +106,8 @@ impl Enclave {
             }
         };
 
-        let status_port = manifest
-            .vsock_ports
-            .as_ref()
-            .and_then(|vp| vp.status_port)
-            .unwrap_or(STATUS_PORT);
-        let app_log_port = manifest
-            .vsock_ports
-            .as_ref()
-            .and_then(|vp| vp.app_log_port)
-            .unwrap_or(APP_LOG_PORT);
-        let http_egress_vsock_port = manifest
-            .vsock_ports
-            .as_ref()
-            .and_then(|vp| vp.http_egress_port)
-            .unwrap_or(HTTP_EGRESS_VSOCK_PORT);
-
         debug!(
-            "using vsock ports: status={status_port}, app_log={app_log_port}, http_egress={http_egress_vsock_port}"
+            "using fixed vsock ports: status={STATUS_PORT}, app_log={APP_LOG_PORT}, http_egress={HTTP_EGRESS_VSOCK_PORT}, clock_sync={CLOCK_SYNC_PORT}"
         );
 
         Ok(Self {
@@ -138,9 +119,6 @@ impl Enclave {
             debug_mode: opts.debug_mode,
             enclave_info: None,
             tasks: Vec::new(),
-            status_port,
-            app_log_port,
-            http_egress_vsock_port,
         })
     }
 
@@ -189,7 +167,7 @@ impl Enclave {
         self.start_ingress_proxies(enclave_info.cid).await?;
 
         let exit_res = tokio::select! {
-            exit_res = Enclave::await_exit(enclave_info.cid, self.status_port) =>
+            exit_res = Enclave::await_exit(enclave_info.cid, STATUS_PORT) =>
                 exit_res,
 
             _ = cancellation.cancelled() =>
@@ -239,15 +217,13 @@ impl Enclave {
     async fn start_egress_proxy(&mut self) -> Result<()> {
         // Note: we _could_ start the egress proxy no matter what, but there is no sense in it,
         // and skipping it seems (barely) safer - so we may as well.
-        if self.manifest.egress.is_none() {
+        if !self.manifest.egress_proxy_enabled() {
             info!("no egress defined, no egress proxy will be started");
             return Ok(());
         }
 
-        let preferred_port = self.http_egress_vsock_port;
-        let (proxy, actual_port) = HostHttpProxy::bind_auto(preferred_port, 10)?;
-        self.http_egress_vsock_port = actual_port;
-        info!("egress proxy bound to vsock port {actual_port}");
+        let proxy = HostHttpProxy::bind(HTTP_EGRESS_VSOCK_PORT)?;
+        info!("egress proxy bound to vsock port {HTTP_EGRESS_VSOCK_PORT}");
         self.tasks.push(utils::spawn!("egress proxy", async move {
             proxy.serve().await;
         })?);
@@ -265,17 +241,12 @@ impl Enclave {
         // Odyn uses the same deterministic mapping when it mounts the enclave-side
         // FUSE filesystems, so both sides must walk the list in the same order.
         for (index, mount) in mounts.iter().enumerate() {
-            let port = HOSTFS_VSOCK_PORT_BASE
-                .checked_add(index as u32)
-                .ok_or_else(|| anyhow!("hostfs port allocation overflowed"))?;
-            if port > HOSTFS_VSOCK_PORT_LIMIT {
-                return Err(anyhow!(
-                    "hostfs mount '{}' exceeds the configured vsock port range {}-{}",
-                    mount.name,
-                    HOSTFS_VSOCK_PORT_BASE,
-                    HOSTFS_VSOCK_PORT_LIMIT
-                ));
-            }
+            let port = hostfs_vsock_port(index).map_err(|err| {
+                anyhow!(
+                    "hostfs mount '{}' cannot be assigned a vsock port: {err}",
+                    mount.name
+                )
+            })?;
 
             let root = PathBuf::from(CONTAINER_HOSTFS_ROOT).join(&mount.name);
             if !root.exists() {
@@ -352,12 +323,11 @@ impl Enclave {
     }
 
     fn start_odyn_log_stream(&mut self, cid: u32) -> Result<()> {
-        let app_log_port = self.app_log_port;
         self.tasks
             .push(utils::spawn!("odyn log stream", async move {
                 info!("waiting for enclave to boot to stream logs");
                 let conn = loop {
-                    match VsockStream::connect(cid, app_log_port).await {
+                    match VsockStream::connect(cid, APP_LOG_PORT).await {
                         Ok(conn) => break conn,
 
                         // TODO: improve the polling frequency / backoff / timeout

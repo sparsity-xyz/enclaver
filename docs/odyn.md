@@ -367,7 +367,7 @@ clock_sync:
 api:
   listen_port: 18000
 
-# Aux API port override (the service also starts by default when API is enabled)
+# Aux API port override (the service is required whenever API is enabled)
 aux_api:
   listen_port: 18001
 
@@ -413,7 +413,7 @@ storage:
 | **Egress** | `egress.proxy_port` | Make outbound HTTP requests | Automatic via `http_proxy` env var |
 | **Clock Sync** | `clock_sync.interval_secs` / `clock_sync.enabled` | Keep enclave wall clock aligned with host time | Automatic; no app changes |
 | **Internal API** | `api.listen_port` | Attestation, signing, encryption, KMS/app-wallet, storage | HTTP to `http://127.0.0.1:<port>` |
-| **Aux API** | `aux_api.listen_port` | Restricted API for sidecars; defaults to `api_port + 1` | HTTP to `http://127.0.0.1:<port>` |
+| **Aux API** | `aux_api.listen_port` | Restricted API for sidecars and attestation; defaults to `api_port + 1` | HTTP to `http://127.0.0.1:<port>` |
 | **Storage** | `storage.s3.*` | Persistent S3 storage exposed via the Internal API | HTTP to `/v1/s3/...` |
 | **Helios RPC** | `helios_rpc.chains[].local_rpc_port` | Trustless multi-chain RPC | HTTP to `http://127.0.0.1:<chain_port>` |
 | **Console** | N/A (automatic) | Log streaming | Print to stdout/stderr |

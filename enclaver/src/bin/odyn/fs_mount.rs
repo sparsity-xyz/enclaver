@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result as AnyhowResult, anyhow};
-use enclaver::constants::{HOSTFS_VSOCK_PORT_BASE, HOSTFS_VSOCK_PORT_LIMIT};
+use enclaver::hostfs::hostfs_vsock_port;
 use enclaver::hostfs_client::{HostFsClient, HostFsClientError};
 use enclaver::manifest::HostFsMountConfig;
 use enclaver::vsock::VMADDR_CID_HOST;
@@ -64,17 +64,12 @@ impl HostFsMountService {
 
         let mut active_mounts = Vec::new();
         for (index, mount) in mounts.iter().enumerate() {
-            let port = HOSTFS_VSOCK_PORT_BASE
-                .checked_add(index as u32)
-                .ok_or_else(|| anyhow!("hostfs port allocation overflowed"))?;
-            if port > HOSTFS_VSOCK_PORT_LIMIT {
-                return Err(anyhow!(
-                    "hostfs mount '{}' exceeds the configured vsock port range {}-{}",
-                    mount.name,
-                    HOSTFS_VSOCK_PORT_BASE,
-                    HOSTFS_VSOCK_PORT_LIMIT
-                ));
-            }
+            let port = hostfs_vsock_port(index).map_err(|err| {
+                anyhow!(
+                    "hostfs mount '{}' cannot be assigned a vsock port: {err}",
+                    mount.name
+                )
+            })?;
 
             match MountedHostFs::start(mount, port).await {
                 Ok(active) => active_mounts.push(active),

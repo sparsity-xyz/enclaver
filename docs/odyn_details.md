@@ -90,8 +90,9 @@ Shutdown order is the reverse:
 ### Internal API and Aux API
 
 - Primary API starts only when `api.listen_port` is configured
-- Aux API currently starts whenever Primary API starts
+- Aux API is part of the Primary API contract because attestation flows depend on it
 - if `aux_api.listen_port` is omitted, Aux API uses `api.listen_port + 1`
+- if `api.listen_port + 1` would overflow `u16`, `aux_api.listen_port` must be set explicitly
 - Aux API does not have an independent enable or disable flag
 - Aux API attestation sanitization removes only `public_key`
 - Aux API preserves `nonce` and `user_data`

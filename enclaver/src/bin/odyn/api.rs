@@ -45,9 +45,6 @@ impl ApiService {
                 let imds =
                     enclaver::integrations::aws_util::imds_client_with_proxy(proxy_uri).await?;
 
-                // Small delay to ensure egress proxy is fully up and ready to handle vsock requests
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
                 let aws_config =
                     enclaver::integrations::aws_util::load_config_from_imds(imds).await?;
 

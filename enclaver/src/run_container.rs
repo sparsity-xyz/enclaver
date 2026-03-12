@@ -7,6 +7,7 @@ use bollard::query_parameters::{
     StopContainerOptions, WaitContainerOptions,
 };
 use futures_util::stream::{StreamExt, TryStreamExt};
+use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -76,6 +77,18 @@ impl Sleeve {
         }
 
         if !loopback_mount_requests.is_empty() {
+            for request in &loopback_mount_requests {
+                info!(
+                    "Hostfs preflight: mount='{}' host_state_dir={} container_path={} enclave_path={} size_mb={} required={}",
+                    request.name,
+                    request.host_state_dir.display(),
+                    request.container_mount_path.display(),
+                    request.enclave_mount_path.display(),
+                    request.size_mb,
+                    request.required
+                );
+            }
+
             // Prepare or reuse the loopback-backed host directories before the
             // Sleeve container starts, then bind-mount them in for hostfs proxying.
             self.hostfs_mounts = tokio::task::spawn_blocking(move || {
@@ -137,6 +150,11 @@ impl Sleeve {
             .id;
 
         self.container_id = Some(container_id.clone());
+
+        info!(
+            "Starting sleeve container image={} debug_mode={} cpu_count={:?} memory_mb={:?}",
+            image_name, debug_mode, cpu_count, memory_mb
+        );
 
         self.docker
             .start_container(&container_id, None::<StartContainerOptions>)

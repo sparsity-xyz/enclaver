@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use nix::fcntl::{FlockArg, flock};
 use uuid::Uuid;
 
+use crate::constants::{HOSTFS_VSOCK_PORT_BASE, HOSTFS_VSOCK_PORT_LIMIT};
 use crate::manifest::Manifest;
 
 // Each runtime --mount binding points at a host state directory. We keep the
@@ -31,6 +32,21 @@ pub struct LoopbackMountRequest {
     pub enclave_mount_path: PathBuf,
     pub size_mb: u64,
     pub required: bool,
+}
+
+pub fn hostfs_vsock_port(index: usize) -> Result<u32> {
+    let port = HOSTFS_VSOCK_PORT_BASE
+        .checked_add(index as u32)
+        .ok_or_else(|| anyhow!("hostfs port allocation overflowed"))?;
+    if port > HOSTFS_VSOCK_PORT_LIMIT {
+        bail!(
+            "hostfs mount index {} exceeds the configured vsock port range {}-{}",
+            index,
+            HOSTFS_VSOCK_PORT_BASE,
+            HOSTFS_VSOCK_PORT_LIMIT
+        );
+    }
+    Ok(port)
 }
 
 #[derive(Debug)]
@@ -166,6 +182,20 @@ pub fn resolve_loopback_mounts(
 pub fn prepare_loopback_mounts(
     requests: &[LoopbackMountRequest],
 ) -> Result<Vec<PreparedLoopbackMount>> {
+    let mut seen_host_state_dirs = HashMap::new();
+    for request in requests {
+        if let Some(existing) =
+            seen_host_state_dirs.insert(request.host_state_dir.clone(), &request.name)
+        {
+            bail!(
+                "hostfs mounts '{}' and '{}' cannot share the same host state dir {}",
+                existing,
+                request.name,
+                request.host_state_dir.display()
+            );
+        }
+    }
+
     let mut mounts = Vec::with_capacity(requests.len());
     for request in requests {
         match prepare_loopback_mount(request.clone()) {
@@ -367,6 +397,18 @@ mod tests {
     }
 
     #[test]
+    fn hostfs_vsock_port_assigns_base_port_for_first_mount() {
+        assert_eq!(hostfs_vsock_port(0).unwrap(), HOSTFS_VSOCK_PORT_BASE);
+    }
+
+    #[test]
+    fn hostfs_vsock_port_rejects_indices_beyond_reserved_range() {
+        let index = (HOSTFS_VSOCK_PORT_LIMIT - HOSTFS_VSOCK_PORT_BASE + 1) as usize;
+        let err = hostfs_vsock_port(index).unwrap_err().to_string();
+        assert!(err.contains("configured vsock port range"));
+    }
+
+    #[test]
     fn resolve_loopback_mounts_matches_manifest_mounts() {
         let manifest = Manifest {
             version: "v1".to_string(),
@@ -383,7 +425,6 @@ mod tests {
             defaults: None,
             api: None,
             aux_api: None,
-            vsock_ports: None,
             storage: Some(Storage {
                 s3: None,
                 mounts: Some(vec![HostFsMountConfig {
@@ -437,7 +478,6 @@ mod tests {
             defaults: None,
             api: None,
             aux_api: None,
-            vsock_ports: None,
             storage: Some(Storage {
                 s3: None,
                 mounts: None,
@@ -460,5 +500,30 @@ mod tests {
             err.to_string()
                 .contains("manifest defines no storage.mounts")
         );
+    }
+
+    #[test]
+    fn prepare_loopback_mounts_rejects_duplicate_host_state_dirs() {
+        let requests = vec![
+            LoopbackMountRequest {
+                name: "appdata".to_string(),
+                host_state_dir: PathBuf::from("/tmp/hostfs-shared"),
+                container_mount_path: PathBuf::from("/mnt/enclaver-hostfs-data/appdata"),
+                enclave_mount_path: PathBuf::from("/mnt/appdata"),
+                size_mb: 64,
+                required: true,
+            },
+            LoopbackMountRequest {
+                name: "cache".to_string(),
+                host_state_dir: PathBuf::from("/tmp/hostfs-shared"),
+                container_mount_path: PathBuf::from("/mnt/enclaver-hostfs-data/cache"),
+                enclave_mount_path: PathBuf::from("/mnt/cache"),
+                size_mb: 64,
+                required: false,
+            },
+        ];
+
+        let err = prepare_loopback_mounts(&requests).unwrap_err().to_string();
+        assert!(err.contains("cannot share the same host state dir"));
     }
 }
