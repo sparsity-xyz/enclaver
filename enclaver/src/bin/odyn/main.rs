@@ -19,9 +19,9 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use enclaver::constants::{APP_LOG_PORT, CLOCK_SYNC_PORT, HTTP_EGRESS_VSOCK_PORT, STATUS_PORT};
-use enclaver::hostfs::hostfs_vsock_port;
+use enclaver::constants::{APP_LOG_PORT, STATUS_PORT};
 use enclaver::nsm::Nsm;
+use enclaver::runtime_vsock::RuntimeHostVsockPorts;
 
 use api::ApiService;
 use aux_api::AuxApiService;
@@ -99,7 +99,11 @@ impl StartedServices {
     }
 }
 
-fn log_launch_plan(config: &Configuration, args: &CliArgs) -> Result<()> {
+fn log_launch_plan(
+    config: &Configuration,
+    args: &CliArgs,
+    runtime_vsock: &RuntimeHostVsockPorts,
+) -> Result<()> {
     info!(
         "Odyn launch plan: bootstrap={}, console={}, config_dir={}, work_dir={}, entrypoint={:?}",
         !args.no_bootstrap,
@@ -115,7 +119,7 @@ fn log_launch_plan(config: &Configuration, args: &CliArgs) -> Result<()> {
     if let Some(proxy_uri) = config.egress_proxy_uri() {
         info!(
             "Egress plan: enabled for user app environment via {} and host vsock port {}",
-            proxy_uri, HTTP_EGRESS_VSOCK_PORT
+            proxy_uri, runtime_vsock.egress_port
         );
     } else {
         info!("Egress plan: disabled");
@@ -153,8 +157,8 @@ fn log_launch_plan(config: &Configuration, args: &CliArgs) -> Result<()> {
 
     if let Some(clock_sync) = config.clock_sync_config() {
         info!(
-            "Clock sync plan: enabled interval={}s host_vsock_port={CLOCK_SYNC_PORT}",
-            clock_sync.interval_secs
+            "Clock sync plan: enabled interval={}s host_vsock_port={}",
+            clock_sync.interval_secs, runtime_vsock.clock_sync_port
         );
     } else {
         info!("Clock sync plan: disabled");
@@ -163,7 +167,7 @@ fn log_launch_plan(config: &Configuration, args: &CliArgs) -> Result<()> {
     match config.manifest.hostfs_mounts() {
         Some(mounts) if !mounts.is_empty() => {
             for (index, mount) in mounts.iter().enumerate() {
-                let port = hostfs_vsock_port(index).map_err(|err| {
+                let port = runtime_vsock.hostfs_mount_port(index).map_err(|err| {
                     anyhow!(
                         "hostfs mount '{}' cannot be assigned a vsock port: {err}",
                         mount.name
@@ -187,8 +191,6 @@ fn log_launch_plan(config: &Configuration, args: &CliArgs) -> Result<()> {
 
 async fn launch(args: &CliArgs) -> Result<launcher::ExitStatus> {
     let config = Arc::new(Configuration::load(&args.config_dir).await?);
-    log_launch_plan(&config, args)?;
-
     let nsm = Arc::new(Nsm::new());
 
     if !args.no_bootstrap {
@@ -196,13 +198,20 @@ async fn launch(args: &CliArgs) -> Result<launcher::ExitStatus> {
         info!("Enclave initialized");
     }
 
+    let runtime_vsock = RuntimeHostVsockPorts::for_local_enclave()?;
+    info!(
+        "Odyn runtime detected local enclave CID={} host_runtime_ports{{egress={}, clock_sync={}}}",
+        runtime_vsock.enclave_cid, runtime_vsock.egress_port, runtime_vsock.clock_sync_port
+    );
+    log_launch_plan(&config, args, &runtime_vsock)?;
+
     let mut services = StartedServices::default();
     let launch_result = async {
-        services.hostfs_mounts = Some(HostFsMountService::start(&config).await?);
-        services.egress = Some(EgressService::start(&config).await?);
+        services.hostfs_mounts = Some(HostFsMountService::start(&config, &runtime_vsock).await?);
+        services.egress = Some(EgressService::start(&config, &runtime_vsock).await?);
 
         // Start clock sync service. It is enabled by default unless disabled in the manifest.
-        services.clock_sync = Some(ClockSyncService::start(&config));
+        services.clock_sync = Some(ClockSyncService::start(&config, &runtime_vsock));
 
         // Start Helios in background (non-blocking, app starts immediately)
         services.helios_rpc = Some(HeliosRpcService::start(&config).await?);

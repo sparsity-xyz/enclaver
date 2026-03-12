@@ -33,7 +33,9 @@ sudo enclaver run -f enclaver.yaml --mount appdata=/var/lib/my-service/appdata
 
 Enclaver will create or reuse `/var/lib/my-service/appdata/.enclaver-hostfs/disk.img` and mount it inside the enclave at `/mnt/appdata`. If you reuse the same host state directory across runs, the contents persist; if you discard that host directory, the mount behaves like a host-backed temporary directory. For the full design and security model, see [Host-Backed Directory Mounts](docs/host_backed_mounts_design.md).
 
-Current limitation: Enclaver does not support running multiple enclaves from separate `enclaver run` processes on the same EC2 instance at the same time. Host-side VSOCK listeners for egress, clock sync, and hostfs are process-global today.
+Multiple `enclaver run` processes can coexist on the same EC2 instance. `enclaver-run` assigns each enclave a managed CID and derives host-side VSOCK listeners for egress, clock sync, and hostfs from the managed enclave CID, so those runtime services do not collide across Enclaver instances. Normal Docker-published TCP ports still need to be unique per container.
+
+For runtime configuration and feature-specific guides, use the links in the documentation section below.
 
 ## Important: HTTP(S) Proxy Support for Enclave Apps
 
@@ -61,7 +63,7 @@ See [docs/http_proxy_support_guidance_for_enclave_applications.md](docs/http_pro
 
 ### Usage
 - [Enclaver CLI Reference](docs/enclaver-cli.md) — CLI commands, flags, and runtime override behavior
-- [Host-Backed Directory Mounts](docs/host_backed_mounts_design.md) — Host-backed directory mounts exposed through a hostfs file proxy; reuse the same host state dir to persist data across runs
+- [Host-Backed Directory Mounts Guide](docs/host_backed_mounts_design.md) — Configure `storage.mounts[]`, bind `--mount`, and understand the host-side `disk.img` layout
 - [Helios RPC Integration](docs/helios_rpc.md) — Trustless Ethereum / OP Stack light-client RPC inside the enclave
 - [Port Handling](docs/port_handling.md) — End-to-end port flow across build, sleeve, odyn, and ingress
 

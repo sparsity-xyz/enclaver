@@ -293,9 +293,29 @@ storage:
 
 **How it works**:
 - `enclaver run --mount <name>=<host_state_dir>` prepares or reuses a fixed-size loopback image on the host
-- `enclaver-run` exposes that filesystem through a hostfs file proxy on a dedicated vsock port
+- `enclaver-run` exposes that filesystem through a hostfs file proxy on a host-side VSOCK port derived from the enclave CID and mount order
 - Odyn mounts a FUSE filesystem at the configured `mount_path` before your app starts
 - Your application uses ordinary file APIs against that mount path
+
+**Actual host layout**:
+- `<host_state_dir>` is the per-mount state directory you bind at runtime
+- Enclaver stores its hostfs metadata under `<host_state_dir>/.enclaver-hostfs/`
+- The durable backing image is `<host_state_dir>/.enclaver-hostfs/disk.img`
+- The runtime lock file is `<host_state_dir>/.enclaver-hostfs/lock`
+- The transient host mountpoint is created as `<host_state_dir>/.enclaver-hostfs/mnt-<uuid>/data`
+
+Example:
+```text
+/opt/nova/deployments/deployment-399/file-proxy/appdata/
+`- .enclaver-hostfs/
+   |- disk.img
+   |- lock
+   `- mnt-<uuid>/
+      `- data/
+```
+
+The extra `.enclaver-hostfs/` layer is intentional: it keeps Enclaver runtime
+metadata separate from the application-visible host state directory.
 
 **Configuration**:
 ```yaml

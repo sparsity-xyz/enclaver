@@ -5,27 +5,31 @@ use log::info;
 use tokio::task::JoinHandle;
 
 use crate::config::Configuration;
-use enclaver::constants::HTTP_EGRESS_VSOCK_PORT;
 use enclaver::policy::EgressPolicy;
 use enclaver::proxy::egress_http::EnclaveHttpProxy;
+use enclaver::runtime_vsock::RuntimeHostVsockPorts;
 
 pub struct EgressService {
     proxy: Option<JoinHandle<()>>,
 }
 
 impl EgressService {
-    pub async fn start(config: &Configuration) -> Result<Self> {
+    pub async fn start(
+        config: &Configuration,
+        runtime_vsock: &RuntimeHostVsockPorts,
+    ) -> Result<Self> {
         let task = if let Some(proxy_uri) = config.egress_proxy_uri() {
             info!("Starting egress");
 
             let policy = Arc::new(EgressPolicy::new(config.manifest.egress.as_ref().unwrap()));
+            let host_egress_port = runtime_vsock.egress_port;
 
             set_proxy_env_var(&proxy_uri.to_string());
 
             let proxy = EnclaveHttpProxy::bind(proxy_uri.port_u16().unwrap()).await?;
 
             Some(tokio::task::spawn(async move {
-                proxy.serve(HTTP_EGRESS_VSOCK_PORT, policy).await;
+                proxy.serve(host_egress_port, policy).await;
             }))
         } else {
             None

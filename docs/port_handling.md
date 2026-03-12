@@ -6,8 +6,10 @@ Scope:
 - Included: `enclaver build`, `enclaver run`, `enclaver-run` (sleeve), `odyn`, `ingress`, API/Aux API/Helios listeners.
 - Excluded: external reverse proxies and platform-specific ingress layers.
 
-Current limitation:
-- Only one Enclaver runtime is supported per EC2 instance at a time. Host-side VSOCK listeners for egress, clock sync, and hostfs use fixed ports, so separate `enclaver run` processes will conflict.
+Multi-instance support:
+- Multiple `enclaver run` processes can run on the same EC2 instance.
+- `enclaver-run` picks a managed enclave CID for each instance and derives host-side VSOCK listeners for egress, clock sync, and hostfs from that CID.
+- Docker-published TCP ports (`-p host:container`) still need to be unique per container, just like normal Docker workloads.
 
 ## Port Layers
 
@@ -43,8 +45,10 @@ For inbound traffic to work, all required layers must align.
 ### `enclaver-run` (sleeve runtime in container)
 
 - Loads packaged manifest.
+- Chooses a managed enclave CID and launches Nitro CLI with that explicit CID.
 - Starts host-side ingress proxies for each `manifest.ingress[].listen_port`.
 - Each proxy listens on container `0.0.0.0:<listen_port>` and forwards to enclave vsock `<listen_port>`.
+- Starts host-side runtime VSOCK listeners for egress, clock sync, and hostfs on ports derived from the managed CID.
 
 ### `odyn` (inside enclave)
 
@@ -96,6 +100,23 @@ Result:
 - Host `:8000` -> container `:8080` -> enclave app `127.0.0.1:8080`
 - Host `:8001` -> container `:18001` -> enclave aux API `127.0.0.1:18001`
 - Internal API `18000` is still not externally reachable (not in `ingress` and not published)
+
+## Host-side Runtime VSOCK Ports
+
+The fixed VSOCK ports inside the enclave are:
+
+- `17000` for app status
+- `17001` for app log streaming
+
+Host-side runtime listeners are not fixed globally. Enclaver derives them from
+the managed enclave CID using a per-CID VSOCK block:
+
+- egress: `20000 + (CID * 128) + 0`
+- clock sync: `20000 + (CID * 128) + 1`
+- hostfs mount `N`: `20000 + (CID * 128) + 16 + N`
+
+That is what allows multiple Enclaver instances on one EC2 to run without
+colliding on host-side runtime VSOCK listeners.
 
 ## Common Pitfalls
 

@@ -701,17 +701,23 @@ mod tests {
             "README should use the current host-backed directory mount terminology"
         );
         assert!(
-            readme.contains("does not support running multiple enclaves from separate `enclaver run` processes on the same EC2 instance"),
-            "README should document the current single-Enclaver-per-EC2 runtime limitation"
+            readme
+                .contains("Multiple `enclaver run` processes can coexist on the same EC2 instance"),
+            "README should document multi-instance support on one EC2"
+        );
+        assert!(
+            readme.contains("host-side VSOCK listeners") && readme.contains("managed enclave CID"),
+            "README should explain that host-side runtime VSOCK listeners are derived from the managed enclave CID"
         );
 
         let hostfs_doc = read("docs/host_backed_mounts_design.md");
         assert!(
-            hostfs_doc.contains("Host-Backed Temporary Directory"),
+            hostfs_doc.contains("Host-Backed Temporary")
+                && hostfs_doc.contains("Directory Mount"),
             "hostfs design doc should note the Nova-style temporary-directory terminology"
         );
         assert!(
-            hostfs_doc.contains("Whether the directory behaves as \"temporary\" or \"persistent\""),
+            hostfs_doc.contains("Whether the mount behaves as \"temporary\" or \"persistent\""),
             "hostfs design doc should explain that persistence depends on host_state_dir reuse"
         );
 
@@ -721,14 +727,22 @@ mod tests {
             "CLI docs should explain that --mount uses the hostfs file proxy"
         );
         assert!(
-            cli_doc.contains("separate `enclaver run` processes are not currently supported concurrently on the same EC2 instance"),
-            "CLI docs should document the current single-instance runtime limitation"
+            cli_doc.contains("separate `enclaver run` processes can coexist on the same EC2"),
+            "CLI docs should document the current multi-instance runtime support"
         );
 
         let port_doc = read("docs/port_handling.md");
         assert!(
-            port_doc.contains("Only one Enclaver runtime is supported per EC2 instance at a time"),
-            "port handling docs should call out the current single-instance runtime limitation"
+            port_doc.contains("Multiple `enclaver run` processes can run on the same EC2 instance"),
+            "port handling docs should call out the current multi-instance runtime support"
+        );
+        assert!(
+            port_doc.contains("20000 + (CID * 128) + 0"),
+            "port handling docs should describe the CID-derived host-side egress port formula"
+        );
+        assert!(
+            port_doc.contains("20000 + (CID * 128) + 16 + N"),
+            "port handling docs should describe the CID-derived host-side hostfs port formula"
         );
 
         let base_images_doc = read("docs/base-images.md");
@@ -781,6 +795,18 @@ mod tests {
         assert!(
             nitro_cli_doc.contains("linux/amd64"),
             "nitro-cli doc should document the current publish architecture"
+        );
+
+        let architecture_doc = read("docs/architecture.md");
+        assert!(
+            architecture_doc.contains("host-side vsock port derived from the enclave CID"),
+            "architecture docs should describe that host-side runtime ports are derived from the enclave CID"
+        );
+
+        let detailed_architecture_doc = read("docs/enclaver-architecture.md");
+        assert!(
+            detailed_architecture_doc.contains("20000 + (CID * 128) + 0"),
+            "detailed architecture docs should list the CID-derived egress port formula"
         );
     }
 

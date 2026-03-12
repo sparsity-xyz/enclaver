@@ -12,10 +12,20 @@ pub const RELEASE_BUNDLE_DIR: &str = "/enclave";
 // start "internal" ports above the 16-bit boundary (reserved for proxying TCP)
 pub const STATUS_PORT: u32 = 17000;
 pub const APP_LOG_PORT: u32 = 17001;
-pub const HTTP_EGRESS_VSOCK_PORT: u32 = 17002;
-pub const CLOCK_SYNC_PORT: u32 = 17003;
-pub const HOSTFS_VSOCK_PORT_BASE: u32 = 17100;
-pub const HOSTFS_VSOCK_PORT_LIMIT: u32 = 17199;
+
+// Enclaver manages enclave CIDs for `enclaver run` so multiple Enclaver instances
+// can coexist on one EC2 without colliding on host-side VSOCK listeners.
+pub const ENCLAVER_MANAGED_CID_START: u32 = 16;
+pub const ENCLAVER_MANAGED_CID_END: u32 = 4096;
+
+// Host-side runtime listeners are derived from the enclave CID.
+pub const HOST_RUNTIME_VSOCK_PORT_BASE: u32 = 20_000;
+pub const HOST_RUNTIME_VSOCK_PORT_STRIDE: u32 = 128;
+pub const HOST_RUNTIME_EGRESS_OFFSET: u32 = 0;
+pub const HOST_RUNTIME_CLOCK_SYNC_OFFSET: u32 = 1;
+pub const HOST_RUNTIME_HOSTFS_OFFSET_BASE: u32 = 16;
+pub const HOST_RUNTIME_HOSTFS_CAPACITY: u32 =
+    HOST_RUNTIME_VSOCK_PORT_STRIDE - HOST_RUNTIME_HOSTFS_OFFSET_BASE;
 
 // Default TCP Port that the egress proxy listens on inside the enclave, if not
 // specified in the manifest.

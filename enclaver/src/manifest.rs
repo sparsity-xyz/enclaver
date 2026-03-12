@@ -573,7 +573,7 @@ fn parse_manifest(buf: &[u8]) -> Result<Manifest> {
 fn validate_manifest_cross_constraints(manifest: &Manifest) -> Result<()> {
     if manifest.vsock_ports.is_some() {
         bail!(
-            "vsock_ports is no longer supported; remove it from the manifest because Enclaver now uses fixed VSOCK ports for status, app logs, and HTTP egress"
+            "vsock_ports is no longer supported; remove it from the manifest because Enclaver now manages runtime VSOCK ports automatically per enclave CID"
         );
     }
 

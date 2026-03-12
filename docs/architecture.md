@@ -116,7 +116,7 @@ Clock sync:
 
 ```text
 Odyn clock-sync client
--> vsock port 17003
+-> host-side vsock port derived from the enclave CID
 -> host time server in enclaver-run
 ```
 
@@ -125,9 +125,10 @@ Host-backed directory mount:
 ```text
 application file API
 -> FUSE mount inside enclave
--> vsock port 17100-17199
+-> host-side vsock port derived from the enclave CID and mount index
 -> hostfs proxy in enclaver-run
--> loopback-backed ext4 mount on the parent instance
+-> transient host mount at <host_state_dir>/.enclaver-hostfs/mnt-<uuid>/data
+   backed by <host_state_dir>/.enclaver-hostfs/disk.img
 ```
 
 ## Important VSOCK ports
@@ -136,9 +137,9 @@ application file API
 |------|-----------|---------|
 | `17000` | enclave -> host | app status stream |
 | `17001` | enclave -> host | app log stream |
-| `17002` | enclave -> host | egress proxy traffic |
-| `17003` | enclave -> host | clock-sync requests |
-| `17100-17199` | enclave -> host | host-backed mount traffic |
+| `20000 + (CID * 128) + 0` | enclave -> host | host-side egress proxy traffic |
+| `20000 + (CID * 128) + 1` | enclave -> host | host-side clock-sync requests |
+| `20000 + (CID * 128) + 16 + N` | enclave -> host | host-backed mount traffic for mount index `N` |
 
 Ingress uses the configured `ingress[].listen_port` values rather than a single fixed VSOCK port.
 

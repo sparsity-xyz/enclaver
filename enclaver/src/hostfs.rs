@@ -9,8 +9,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use nix::fcntl::{FlockArg, flock};
 use uuid::Uuid;
 
-use crate::constants::{HOSTFS_VSOCK_PORT_BASE, HOSTFS_VSOCK_PORT_LIMIT};
 use crate::manifest::Manifest;
+use crate::runtime_vsock::RuntimeHostVsockPorts;
 
 // Each runtime --mount binding points at a host state directory. We keep the
 // loopback image and lock state under a hidden metadata directory there so the
@@ -34,21 +34,8 @@ pub struct LoopbackMountRequest {
     pub required: bool,
 }
 
-pub fn hostfs_vsock_port(index: usize) -> Result<u32> {
-    let index_u32 = u32::try_from(index)
-        .map_err(|_| anyhow!("hostfs mount index {index} does not fit into u32"))?;
-    let port = HOSTFS_VSOCK_PORT_BASE
-        .checked_add(index_u32)
-        .ok_or_else(|| anyhow!("hostfs port allocation overflowed"))?;
-    if port > HOSTFS_VSOCK_PORT_LIMIT {
-        bail!(
-            "hostfs mount index {} exceeds the configured vsock port range {}-{}",
-            index,
-            HOSTFS_VSOCK_PORT_BASE,
-            HOSTFS_VSOCK_PORT_LIMIT
-        );
-    }
-    Ok(port)
+pub fn hostfs_vsock_port(enclave_cid: u32, index: usize) -> Result<u32> {
+    RuntimeHostVsockPorts::for_cid(enclave_cid)?.hostfs_mount_port(index)
 }
 
 #[derive(Debug)]
@@ -384,6 +371,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::{ENCLAVER_MANAGED_CID_START, HOST_RUNTIME_HOSTFS_CAPACITY};
     use crate::manifest::{HostFsMountConfig, Manifest, Sources, Storage};
 
     #[test]
@@ -400,21 +388,31 @@ mod tests {
 
     #[test]
     fn hostfs_vsock_port_assigns_base_port_for_first_mount() {
-        assert_eq!(hostfs_vsock_port(0).unwrap(), HOSTFS_VSOCK_PORT_BASE);
+        let first = hostfs_vsock_port(ENCLAVER_MANAGED_CID_START, 0).unwrap();
+        let second = hostfs_vsock_port(ENCLAVER_MANAGED_CID_START + 1, 0).unwrap();
+
+        assert_ne!(first, second);
     }
 
     #[test]
     fn hostfs_vsock_port_rejects_indices_beyond_reserved_range() {
-        let index = (HOSTFS_VSOCK_PORT_LIMIT - HOSTFS_VSOCK_PORT_BASE + 1) as usize;
-        let err = hostfs_vsock_port(index).unwrap_err().to_string();
-        assert!(err.contains("configured vsock port range"));
+        let err = hostfs_vsock_port(
+            ENCLAVER_MANAGED_CID_START,
+            HOST_RUNTIME_HOSTFS_CAPACITY as usize,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("per-enclave hostfs capacity"));
     }
 
     #[test]
     fn hostfs_vsock_port_rejects_indices_that_do_not_fit_u32() {
-        let err = hostfs_vsock_port((u32::MAX as usize).saturating_add(1))
-            .unwrap_err()
-            .to_string();
+        let err = hostfs_vsock_port(
+            ENCLAVER_MANAGED_CID_START,
+            (u32::MAX as usize).saturating_add(1),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("does not fit into u32"));
     }
 

@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result as AnyhowResult, anyhow};
-use enclaver::hostfs::hostfs_vsock_port;
 use enclaver::hostfs_client::{HostFsClient, HostFsClientError};
 use enclaver::manifest::HostFsMountConfig;
+use enclaver::runtime_vsock::RuntimeHostVsockPorts;
 use enclaver::vsock::VMADDR_CID_HOST;
 use fuse_mt::{
     CreatedEntry, DirectoryEntry, FileAttr, FileType, FilesystemMT, FuseMT, RequestInfo, Statfs,
@@ -45,7 +45,10 @@ struct HostFsFilesystem {
 }
 
 impl HostFsMountService {
-    pub async fn start(config: &Configuration) -> AnyhowResult<Self> {
+    pub async fn start(
+        config: &Configuration,
+        runtime_vsock: &RuntimeHostVsockPorts,
+    ) -> AnyhowResult<Self> {
         let Some(mounts) = config.manifest.hostfs_mounts() else {
             return Ok(Self {
                 _mounts: Vec::new(),
@@ -64,7 +67,7 @@ impl HostFsMountService {
 
         let mut active_mounts = Vec::new();
         for (index, mount) in mounts.iter().enumerate() {
-            let port = hostfs_vsock_port(index).map_err(|err| {
+            let port = runtime_vsock.hostfs_mount_port(index).map_err(|err| {
                 anyhow!(
                     "hostfs mount '{}' cannot be assigned a vsock port: {err}",
                     mount.name

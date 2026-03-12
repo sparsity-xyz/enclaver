@@ -3265,6 +3265,7 @@ dependencies = [
  "tokio-util",
  "tokio-vsock",
  "uuid",
+ "vsock",
  "zeroize",
 ]
 

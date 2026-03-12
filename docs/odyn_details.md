@@ -67,7 +67,7 @@ Shutdown order is the reverse:
 
 - Odyn mounts host-backed directories before egress, API startup, and app launch
 - the same primitive can be used as a temporary working directory or persistent state, depending on whether the host state directory is reused
-- each mount uses a deterministic hostfs vsock port derived from its manifest order
+- each mount uses a deterministic hostfs vsock port derived from the local enclave CID and manifest order
 - required mounts fail startup if the host proxy is unavailable or the FUSE mount cannot be created
 - optional mounts log a warning and are skipped
 - mount paths are created automatically if missing
@@ -78,7 +78,7 @@ Shutdown order is the reverse:
 - clock sync is default-on when omitted from the manifest
 - it starts before API/app launch, but it runs asynchronously
 - it performs an initial sync attempt, then periodic sync
-- it talks to the host over VSOCK port `17003`
+- it talks to the host over a VSOCK port derived from the local enclave CID
 - both sides use timeouts to avoid hanging forever on a stalled request
 
 ### Helios
@@ -163,12 +163,12 @@ This is operational synchronization, not a trusted time source.
 |------|---------|
 | `17000` | status stream |
 | `17001` | application log stream |
-| `17003` | clock-sync requests |
-| `17100-17199` | host-backed mount traffic |
+| `20000 + (CID * 128) + 1` | host-side clock-sync requests |
+| `20000 + (CID * 128) + 16 + N` | host-backed mount traffic for mount index `N` |
 
 Ingress uses configured listen ports rather than a single fixed VSOCK port.
 
-Host-side egress uses port `17002`, but that listener is owned by `enclaver-run`, not Odyn.
+Host-side egress uses `20000 + (CID * 128) + 0`, and that listener is owned by `enclaver-run`, not Odyn.
 
 ## Common failure modes
 

@@ -1,9 +1,9 @@
 use crate::constants::{
-    APP_LOG_PORT, CLOCK_SYNC_PORT, EIF_FILE_NAME, HTTP_EGRESS_VSOCK_PORT, MANIFEST_FILE_NAME,
-    RELEASE_BUNDLE_DIR, STATUS_PORT,
+    APP_LOG_PORT, EIF_FILE_NAME, MANIFEST_FILE_NAME, RELEASE_BUNDLE_DIR, STATUS_PORT,
 };
 use crate::hostfs::{CONTAINER_HOSTFS_ROOT, hostfs_vsock_port};
 use crate::manifest::{Defaults, Manifest, load_manifest};
+use crate::runtime_vsock::{RuntimeHostVsockPorts, allocate_managed_enclave_cid};
 use crate::utils;
 use anyhow::{Result, anyhow};
 use futures_util::stream::StreamExt;
@@ -31,6 +31,7 @@ const CLOCK_SYNC_MAX_REQUEST_LEN: usize = 16;
 
 const DEFAULT_CPU_COUNT: i32 = 2;
 const DEFAULT_MEMORY_MB: i32 = 4096;
+const HOST_RUNTIME_BIND_RETRY_LIMIT: usize = 16;
 
 pub struct EnclaveOpts {
     pub eif_path: Option<PathBuf>,
@@ -48,6 +49,7 @@ pub struct Enclave {
     memory_mb: i32,
     debug_mode: bool,
     enclave_info: Option<EnclaveInfo>,
+    runtime_vsock: Option<RuntimeHostVsockPorts>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -107,7 +109,7 @@ impl Enclave {
         };
 
         debug!(
-            "using fixed vsock ports: status={STATUS_PORT}, app_log={APP_LOG_PORT}, http_egress={HTTP_EGRESS_VSOCK_PORT}, clock_sync={CLOCK_SYNC_PORT}"
+            "using fixed enclave-local vsock ports: status={STATUS_PORT}, app_log={APP_LOG_PORT}; host-side runtime ports will be derived from the managed enclave CID"
         );
 
         Ok(Self {
@@ -118,6 +120,7 @@ impl Enclave {
             memory_mb,
             debug_mode: opts.debug_mode,
             enclave_info: None,
+            runtime_vsock: None,
             tasks: Vec::new(),
         })
     }
@@ -129,26 +132,35 @@ impl Enclave {
             return Err(anyhow!("Enclave already started"));
         }
 
-        // Start the egress proxy before starting the enclave, to avoid (unlikely) race conditions
-        // where something inside the enclave attempts egress before the proxy is ready.
-        self.start_egress_proxy().await?;
+        let runtime_vsock = self.prepare_host_runtime().await?;
+        self.runtime_vsock = Some(runtime_vsock.clone());
 
-        self.start_hostfs_proxies()?;
-
-        // Start clock sync time server before the enclave so it's ready when odyn boots.
-        self.start_clock_sync_server()?;
-
-        info!("starting enclave");
-        let enclave_info = self
+        info!(
+            "starting enclave with managed CID={} host_runtime_ports{{egress={}, clock_sync={}}}",
+            runtime_vsock.enclave_cid, runtime_vsock.egress_port, runtime_vsock.clock_sync_port
+        );
+        let enclave_info = match self
             .cli
             .run_enclave(RunEnclaveArgs {
                 cpu_count: self.cpu_count,
                 memory_mb: self.memory_mb,
                 eif_path: self.eif_path.clone(),
-                cid: None,
+                cid: Some(runtime_vsock.enclave_cid),
                 debug_mode: self.debug_mode,
             })
-            .await?;
+            .await
+        {
+            Ok(info) => info,
+            Err(err) => {
+                if let Err(cleanup_err) = self.cleanup_running_state().await {
+                    error!("error cleaning up after failed enclave start: {cleanup_err}");
+                }
+                return Err(err.context(format!(
+                    "failed to start enclave with managed CID {}",
+                    runtime_vsock.enclave_cid
+                )));
+            }
+        };
 
         self.enclave_info = Some(enclave_info.clone());
 
@@ -174,7 +186,7 @@ impl Enclave {
                 Ok(EnclaveExitStatus::Cancelled),
         };
 
-        if let Err(err) = self.cleanup().await {
+        if let Err(err) = self.cleanup_running_state().await {
             error!("error terminating enclave: {err}");
         }
 
@@ -191,6 +203,63 @@ impl Enclave {
         };
 
         exit_res
+    }
+
+    async fn prepare_host_runtime(&mut self) -> Result<RuntimeHostVsockPorts> {
+        for attempt in 1..=HOST_RUNTIME_BIND_RETRY_LIMIT {
+            let runtime_vsock = self.select_runtime_vsock_ports().await?;
+
+            debug!(
+                "attempting host runtime reservation with managed CID={} egress_port={} clock_sync_port={} (attempt {}/{})",
+                runtime_vsock.enclave_cid,
+                runtime_vsock.egress_port,
+                runtime_vsock.clock_sync_port,
+                attempt,
+                HOST_RUNTIME_BIND_RETRY_LIMIT
+            );
+
+            let start_result = async {
+                // Start host-side services before the enclave so they are ready
+                // when Odyn begins dialing host VSOCK endpoints.
+                self.start_egress_proxy(&runtime_vsock).await?;
+                self.start_hostfs_proxies(&runtime_vsock)?;
+                self.start_clock_sync_server(&runtime_vsock)?;
+                Ok(())
+            }
+            .await;
+
+            match start_result {
+                Ok(()) => return Ok(runtime_vsock),
+                Err(err) if is_addr_in_use_error(&err) => {
+                    warn!(
+                        "managed CID {} collided on a derived host runtime VSOCK port (attempt {}/{}): {err:#}; retrying with a new CID",
+                        runtime_vsock.enclave_cid, attempt, HOST_RUNTIME_BIND_RETRY_LIMIT
+                    );
+                    self.abort_tasks().await;
+                    continue;
+                }
+                Err(err) => {
+                    self.abort_tasks().await;
+                    return Err(err);
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "failed to reserve host-side runtime VSOCK ports after {} attempts",
+            HOST_RUNTIME_BIND_RETRY_LIMIT
+        ))
+    }
+
+    async fn select_runtime_vsock_ports(&self) -> Result<RuntimeHostVsockPorts> {
+        let used_cids = self
+            .cli
+            .describe_enclaves()
+            .await?
+            .into_iter()
+            .map(|enclave| enclave.cid);
+        let cid = allocate_managed_enclave_cid(used_cids)?;
+        RuntimeHostVsockPorts::for_cid(cid)
     }
 
     async fn start_ingress_proxies(&mut self, cid: u32) -> Result<()> {
@@ -214,7 +283,7 @@ impl Enclave {
         Ok(())
     }
 
-    async fn start_egress_proxy(&mut self) -> Result<()> {
+    async fn start_egress_proxy(&mut self, runtime_vsock: &RuntimeHostVsockPorts) -> Result<()> {
         // Note: we _could_ start the egress proxy no matter what, but there is no sense in it,
         // and skipping it seems (barely) safer - so we may as well.
         if !self.manifest.egress_proxy_enabled() {
@@ -222,13 +291,19 @@ impl Enclave {
             return Ok(());
         }
 
-        let proxy = HostHttpProxy::bind(HTTP_EGRESS_VSOCK_PORT).map_err(|err| {
-            annotate_host_vsock_bind_conflict(
+        let proxy = HostHttpProxy::bind(runtime_vsock.egress_port).map_err(|err| {
+            annotate_host_vsock_bind_error(
                 err,
-                format!("host egress proxy vsock port {}", HTTP_EGRESS_VSOCK_PORT),
+                format!(
+                    "host egress proxy vsock port {} for managed CID {}",
+                    runtime_vsock.egress_port, runtime_vsock.enclave_cid
+                ),
             )
         })?;
-        info!("egress proxy bound to vsock port {HTTP_EGRESS_VSOCK_PORT}");
+        info!(
+            "egress proxy bound to host-side vsock port {} for managed CID {}",
+            runtime_vsock.egress_port, runtime_vsock.enclave_cid
+        );
         self.tasks.push(utils::spawn!("egress proxy", async move {
             proxy.serve().await;
         })?);
@@ -236,17 +311,18 @@ impl Enclave {
         Ok(())
     }
 
-    fn start_hostfs_proxies(&mut self) -> Result<()> {
+    fn start_hostfs_proxies(&mut self, runtime_vsock: &RuntimeHostVsockPorts) -> Result<()> {
         let Some(mounts) = self.manifest.hostfs_mounts() else {
             info!("no hostfs mounts defined, no hostfs proxies will be started");
             return Ok(());
         };
 
-        // Mount order in the manifest defines the hostfs vsock port assignment.
-        // Odyn uses the same deterministic mapping when it mounts the enclave-side
-        // FUSE filesystems, so both sides must walk the list in the same order.
+        // Mount order in the manifest defines the hostfs offset within the
+        // per-enclave runtime VSOCK block. Odyn derives the same host-side
+        // port from its local CID, so both sides must walk the list in the
+        // same order.
         for (index, mount) in mounts.iter().enumerate() {
-            let port = hostfs_vsock_port(index).map_err(|err| {
+            let port = hostfs_vsock_port(runtime_vsock.enclave_cid, index).map_err(|err| {
                 anyhow!(
                     "hostfs mount '{}' cannot be assigned a vsock port: {err}",
                     mount.name
@@ -272,15 +348,18 @@ impl Enclave {
             }
 
             let proxy = HostFsProxy::bind(&mount.name, root, false, port).map_err(|err| {
-                annotate_host_vsock_bind_conflict(
+                annotate_host_vsock_bind_error(
                     err,
-                    format!("hostfs mount '{}' vsock port {}", mount.name, port),
+                    format!(
+                        "hostfs mount '{}' host-side vsock port {} for managed CID {}",
+                        mount.name, port, runtime_vsock.enclave_cid
+                    ),
                 )
             })?;
 
             info!(
-                "starting hostfs proxy for mount '{}' on vsock port {}",
-                mount.name, port
+                "starting hostfs proxy for mount '{}' on host-side vsock port {} (managed CID {})",
+                mount.name, port, runtime_vsock.enclave_cid
             );
             self.tasks.push(utils::spawn!(
                 &format!("hostfs proxy ({})", mount.name),
@@ -293,7 +372,7 @@ impl Enclave {
         Ok(())
     }
 
-    fn start_clock_sync_server(&mut self) -> Result<()> {
+    fn start_clock_sync_server(&mut self, runtime_vsock: &RuntimeHostVsockPorts) -> Result<()> {
         let clock_sync = self.manifest.effective_clock_sync();
 
         if !clock_sync.enabled {
@@ -301,29 +380,20 @@ impl Enclave {
             return Ok(());
         }
 
-        info!("starting host-side clock sync time server on vsock port {CLOCK_SYNC_PORT}");
+        info!(
+            "starting host-side clock sync time server on vsock port {} for managed CID {}",
+            runtime_vsock.clock_sync_port, runtime_vsock.enclave_cid
+        );
 
-        let listener = match crate::vsock::serve(CLOCK_SYNC_PORT) {
-            Ok(listener) => listener,
-            Err(e) => {
-                let source = if self.manifest.clock_sync.is_some() {
-                    "configured in manifest"
-                } else {
-                    "enabled by default"
-                };
-                warn!(
-                    "{}; continuing without host clock sync",
-                    annotate_host_vsock_bind_conflict(
-                        e.into(),
-                        format!(
-                            "clock sync host time server vsock port {} (clock sync is {source})",
-                            CLOCK_SYNC_PORT
-                        ),
-                    )
-                );
-                return Ok(());
-            }
-        };
+        let listener = crate::vsock::serve(runtime_vsock.clock_sync_port).map_err(|err| {
+            annotate_host_vsock_bind_error(
+                err,
+                format!(
+                    "clock sync host time server vsock port {} for managed CID {}",
+                    runtime_vsock.clock_sync_port, runtime_vsock.enclave_cid
+                ),
+            )
+        })?;
         self.tasks
             .push(utils::spawn!("clock sync time server", async move {
                 tokio::pin!(listener);
@@ -437,15 +507,22 @@ impl Enclave {
         Ok(())
     }
 
-    async fn cleanup(self) -> Result<()> {
-        if let Some(enclave_info) = self.enclave_info {
+    async fn cleanup_running_state(&mut self) -> Result<()> {
+        if let Some(enclave_info) = self.enclave_info.take() {
             debug!("terminating enclave");
             self.cli.terminate_enclave(&enclave_info.id).await?;
         } else {
             debug!("no enclave to stop");
         }
 
-        for task in self.tasks {
+        self.runtime_vsock = None;
+        self.abort_tasks().await;
+
+        Ok(())
+    }
+
+    async fn abort_tasks(&mut self) {
+        for task in std::mem::take(&mut self.tasks) {
             task.abort();
             match task.await {
                 Ok(_) => {}
@@ -454,22 +531,26 @@ impl Enclave {
                 }
             };
         }
-
-        Ok(())
     }
 }
 
-fn annotate_host_vsock_bind_conflict(err: anyhow::Error, binding: String) -> anyhow::Error {
-    if err
-        .chain()
-        .any(|cause| matches!(cause.downcast_ref::<std::io::Error>(), Some(io_err) if io_err.kind() == std::io::ErrorKind::AddrInUse))
-    {
-        anyhow!(
-            "failed to bind {binding}: another Enclaver instance may already be running on this EC2; concurrent multiple Enclaver instances on the same EC2 are not currently supported"
-        )
+fn annotate_host_vsock_bind_error(err: anyhow::Error, binding: String) -> anyhow::Error {
+    if is_addr_in_use_error(&err) {
+        err.context(format!(
+            "failed to bind {binding}: the derived host-side VSOCK port is already in use"
+        ))
     } else {
-        anyhow!("failed to bind {binding}: {err}")
+        err.context(format!("failed to bind {binding}"))
     }
+}
+
+fn is_addr_in_use_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<std::io::Error>(),
+            Some(io_err) if io_err.kind() == std::io::ErrorKind::AddrInUse
+        )
+    })
 }
 
 /// Handle a single clock sync time request from the enclave.
