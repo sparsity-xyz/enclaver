@@ -248,12 +248,13 @@ impl Enclave {
                 HOST_RUNTIME_BIND_RETRY_LIMIT
             );
 
+            let allow_degraded_clock_sync = attempt == HOST_RUNTIME_BIND_RETRY_LIMIT;
             let start_result = async {
                 // Start host-side services before the enclave so they are ready
                 // when Odyn begins dialing host VSOCK endpoints.
                 self.start_egress_proxy(&runtime_vsock).await?;
                 self.start_hostfs_proxies(&runtime_vsock)?;
-                self.start_clock_sync_server(&runtime_vsock)?;
+                self.start_clock_sync_server(&runtime_vsock, allow_degraded_clock_sync)?;
                 Ok(())
             }
             .await;
@@ -408,7 +409,11 @@ impl Enclave {
         Ok(())
     }
 
-    fn start_clock_sync_server(&mut self, runtime_vsock: &RuntimeHostVsockPorts) -> Result<()> {
+    fn start_clock_sync_server(
+        &mut self,
+        runtime_vsock: &RuntimeHostVsockPorts,
+        allow_degraded_addr_in_use: bool,
+    ) -> Result<()> {
         let clock_sync = self.manifest.effective_clock_sync();
 
         if !clock_sync.enabled {
@@ -431,6 +436,7 @@ impl Enclave {
                 return handle_clock_sync_bind_error(
                     annotate_host_vsock_bind_error(err, binding),
                     runtime_vsock,
+                    allow_degraded_addr_in_use,
                 );
             }
         };
@@ -666,10 +672,14 @@ fn is_managed_cid_conflict_error(err: &anyhow::Error) -> bool {
 fn handle_clock_sync_bind_error(
     err: anyhow::Error,
     runtime_vsock: &RuntimeHostVsockPorts,
+    allow_degraded_addr_in_use: bool,
 ) -> Result<()> {
     if is_addr_in_use_error(&err) {
+        if !allow_degraded_addr_in_use {
+            return Err(err);
+        }
         warn!(
-            "failed to bind host-side clock sync time server on vsock port {} for managed CID {}: {err:#}; continuing without a dedicated clock sync listener",
+            "failed to bind host-side clock sync time server on vsock port {} for managed CID {} after exhausting managed CID retries: {err:#}; continuing without a dedicated clock sync listener",
             runtime_vsock.clock_sync_port, runtime_vsock.enclave_cid
         );
         return Ok(());
@@ -792,14 +802,24 @@ mod tests {
             std::io::ErrorKind::AddrInUse,
             "port already in use",
         ));
-        assert!(handle_clock_sync_bind_error(err, &runtime_vsock).is_ok());
+        assert!(handle_clock_sync_bind_error(err, &runtime_vsock, true).is_ok());
+    }
+
+    #[test]
+    fn clock_sync_addr_in_use_retries_before_degrading() {
+        let runtime_vsock = RuntimeHostVsockPorts::for_cid(16).unwrap();
+        let err = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "port already in use",
+        ));
+        assert!(handle_clock_sync_bind_error(err, &runtime_vsock, false).is_err());
     }
 
     #[test]
     fn clock_sync_non_addr_in_use_still_errors() {
         let runtime_vsock = RuntimeHostVsockPorts::for_cid(16).unwrap();
         let err = anyhow::Error::msg("some other failure");
-        assert!(handle_clock_sync_bind_error(err, &runtime_vsock).is_err());
+        assert!(handle_clock_sync_bind_error(err, &runtime_vsock, true).is_err());
     }
 
     #[test]

@@ -10,8 +10,6 @@ use nix::fcntl::{FlockArg, flock};
 use uuid::Uuid;
 
 use crate::manifest::Manifest;
-use crate::runtime_vsock::RuntimeHostVsockPorts;
-
 // Each runtime --mount binding points at a host state directory. We keep the
 // loopback image and lock state under a hidden metadata directory there so the
 // same host path can be reused across runs to preserve contents.
@@ -32,10 +30,6 @@ pub struct LoopbackMountRequest {
     pub enclave_mount_path: PathBuf,
     pub size_mb: u64,
     pub required: bool,
-}
-
-pub fn hostfs_vsock_port(enclave_cid: u32, index: usize) -> Result<u32> {
-    RuntimeHostVsockPorts::for_cid(enclave_cid)?.hostfs_mount_port(index)
 }
 
 #[derive(Debug)]
@@ -371,8 +365,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::{ENCLAVER_MANAGED_CID_START, HOST_RUNTIME_HOSTFS_CAPACITY};
+    use crate::constants::HOST_RUNTIME_HOSTFS_CAPACITY;
     use crate::manifest::{HostFsMountConfig, Manifest, Sources, Storage};
+    use crate::runtime_vsock::RuntimeHostVsockPorts;
 
     #[test]
     fn parse_runtime_mount_binding_accepts_name_and_path() {
@@ -387,32 +382,36 @@ mod tests {
     }
 
     #[test]
-    fn hostfs_vsock_port_assigns_base_port_for_first_mount() {
-        let first = hostfs_vsock_port(ENCLAVER_MANAGED_CID_START, 0).unwrap();
-        let second = hostfs_vsock_port(ENCLAVER_MANAGED_CID_START + 1, 0).unwrap();
+    fn runtime_hostfs_ports_for_distinct_cids_do_not_overlap() {
+        let first = RuntimeHostVsockPorts::for_cid(16)
+            .unwrap()
+            .hostfs_mount_port(0)
+            .unwrap();
+        let second = RuntimeHostVsockPorts::for_cid(17)
+            .unwrap()
+            .hostfs_mount_port(0)
+            .unwrap();
 
         assert_ne!(first, second);
     }
 
     #[test]
-    fn hostfs_vsock_port_rejects_indices_beyond_reserved_range() {
-        let err = hostfs_vsock_port(
-            ENCLAVER_MANAGED_CID_START,
-            HOST_RUNTIME_HOSTFS_CAPACITY as usize,
-        )
-        .unwrap_err()
-        .to_string();
+    fn runtime_hostfs_ports_reject_indices_beyond_reserved_range() {
+        let err = RuntimeHostVsockPorts::for_cid(16)
+            .unwrap()
+            .hostfs_mount_port(HOST_RUNTIME_HOSTFS_CAPACITY as usize)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("per-enclave hostfs capacity"));
     }
 
     #[test]
-    fn hostfs_vsock_port_rejects_indices_that_do_not_fit_u32() {
-        let err = hostfs_vsock_port(
-            ENCLAVER_MANAGED_CID_START,
-            (u32::MAX as usize).saturating_add(1),
-        )
-        .unwrap_err()
-        .to_string();
+    fn runtime_hostfs_ports_reject_indices_that_do_not_fit_u32() {
+        let err = RuntimeHostVsockPorts::for_cid(16)
+            .unwrap()
+            .hostfs_mount_port((u32::MAX as usize).saturating_add(1))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("does not fit into u32"));
     }
 
@@ -466,6 +465,54 @@ mod tests {
         assert_eq!(
             requests[0].enclave_mount_path,
             PathBuf::from("/mnt/appdata")
+        );
+    }
+
+    #[test]
+    fn resolve_loopback_mounts_matches_manifest_mounts_case_insensitively() {
+        let manifest = Manifest {
+            version: "v1".to_string(),
+            name: "test".to_string(),
+            target: "target:latest".to_string(),
+            sources: Sources {
+                app: "app:latest".to_string(),
+                odyn: None,
+                sleeve: None,
+            },
+            signature: None,
+            ingress: None,
+            egress: None,
+            defaults: None,
+            api: None,
+            aux_api: None,
+            storage: Some(Storage {
+                s3: None,
+                mounts: Some(vec![HostFsMountConfig {
+                    name: "appdata".to_string(),
+                    mount_path: PathBuf::from("/mnt/appdata"),
+                    required: true,
+                    size_mb: 64,
+                }]),
+            }),
+            kms_integration: None,
+            helios_rpc: None,
+            clock_sync: None,
+        };
+
+        let requests = resolve_loopback_mounts(
+            &manifest,
+            &[RuntimeMountBinding {
+                name: "APPDATA".to_string(),
+                host_path: PathBuf::from("/var/lib/appdata"),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].name, "appdata");
+        assert_eq!(
+            requests[0].host_state_dir,
+            PathBuf::from("/var/lib/appdata")
         );
     }
 

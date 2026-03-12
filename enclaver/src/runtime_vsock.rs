@@ -83,7 +83,8 @@ pub fn validate_enclave_cid(enclave_cid: u32) -> Result<()> {
         );
     }
 
-    // Verify the CID maps to a valid host-side VSOCK block and catch overflow.
+    // Verify the CID maps to a valid host-side VSOCK block and catch overflow
+    // before any caller tries to use the derived ports.
     let _ = runtime_block_base(enclave_cid)?;
     Ok(())
 }

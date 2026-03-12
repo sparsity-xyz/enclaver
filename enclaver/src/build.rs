@@ -437,6 +437,9 @@ pub struct ResolvedSources {
 
 #[cfg(test)]
 mod tests {
+    // Intentionally strict: these tests treat selected docs/workflows/scripts
+    // as part of the product contract, so CI fails fast when code and
+    // user-facing operational guidance drift apart.
     use super::NITRO_CLI_IMAGE;
     use std::fs;
     use std::path::{Path, PathBuf};

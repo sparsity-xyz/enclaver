@@ -47,6 +47,8 @@ impl Manifest {
         self.aux_api
             .as_ref()
             .and_then(|aux_api| aux_api.listen_port)
+            // Aux API is required when api.listen_port is configured, but
+            // adding the default `+ 1` port must still remain overflow-safe.
             .or_else(|| api_port.checked_add(1))
     }
 

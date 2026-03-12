@@ -7,7 +7,7 @@ use bollard::query_parameters::{
     StopContainerOptions, WaitContainerOptions,
 };
 use futures_util::stream::{StreamExt, TryStreamExt};
-use log::info;
+use log::{info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -201,8 +201,18 @@ impl Sleeve {
         self.stream_task = Some(tokio::task::spawn(async move {
             while let Some(Ok(item)) = log_stream.next().await {
                 match item {
-                    LogOutput::StdOut { message } => stdout.write_all(&message).await.unwrap(),
-                    LogOutput::StdErr { message } => stderr.write_all(&message).await.unwrap(),
+                    LogOutput::StdOut { message } => {
+                        if let Err(err) = stdout.write_all(&message).await {
+                            warn!("stopping sleeve stdout stream after write failure: {err}");
+                            break;
+                        }
+                    }
+                    LogOutput::StdErr { message } => {
+                        if let Err(err) = stderr.write_all(&message).await {
+                            warn!("stopping sleeve stderr stream after write failure: {err}");
+                            break;
+                        }
+                    }
                     _ => {}
                 }
             }
