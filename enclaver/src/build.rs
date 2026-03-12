@@ -697,27 +697,31 @@ mod tests {
 
         let readme = read("README.md");
         assert!(
-            readme.contains("Host-Backed Directory Mounts"),
-            "README should use the current host-backed directory mount terminology"
+            readme.contains("## Enclaver Highlights"),
+            "README should summarize Enclaver's core capabilities in a dedicated highlights section"
         );
         assert!(
-            readme
-                .contains("Multiple `enclaver run` processes can coexist on the same EC2 instance"),
-            "README should document multi-instance support on one EC2"
-        );
-        assert!(
-            readme.contains("host-side VSOCK listeners") && readme.contains("managed enclave CID"),
-            "README should explain that host-side runtime VSOCK listeners are derived from the managed enclave CID"
+            readme.contains(
+                "[Host-Backed Directory Mounts Guide](docs/host_backed_mounts_design.md)"
+            ),
+            "README should point readers to the dedicated host-backed mounts guide instead of inlining the feature details"
         );
 
         let hostfs_doc = read("docs/host_backed_mounts_design.md");
         assert!(
-            hostfs_doc.contains("Host-Backed Temporary") && hostfs_doc.contains("Directory Mount"),
-            "hostfs design doc should note the Nova-style temporary-directory terminology"
+            hostfs_doc.to_ascii_lowercase().contains("host-backed")
+                && hostfs_doc
+                    .to_ascii_lowercase()
+                    .contains("temporary directory"),
+            "hostfs design doc should describe the temporary-directory behavior without relying on external product naming"
         );
         assert!(
             hostfs_doc.contains("Whether the mount behaves as \"temporary\" or \"persistent\""),
             "hostfs design doc should explain that persistence depends on host_state_dir reuse"
+        );
+        assert!(
+            !hostfs_doc.contains("Nova Platform") && !hostfs_doc.contains("/opt/nova/"),
+            "hostfs design doc should avoid Nova Platform-specific naming or example paths"
         );
 
         let cli_doc = read("docs/enclaver-cli.md");
@@ -794,6 +798,16 @@ mod tests {
         assert!(
             nitro_cli_doc.contains("linux/amd64"),
             "nitro-cli doc should document the current publish architecture"
+        );
+        assert!(
+            !nitro_cli_doc.contains("Nova Platform"),
+            "nitro-cli doc should avoid Nova Platform-specific naming for host-backed mounts"
+        );
+
+        let odyn_doc = read("docs/odyn.md");
+        assert!(
+            !odyn_doc.contains("/opt/nova/"),
+            "odyn docs should avoid Nova Platform-specific example paths for host-backed mounts"
         );
 
         let architecture_doc = read("docs/architecture.md");

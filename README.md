@@ -1,8 +1,23 @@
-<img src="docs/img/enclaver-logo-color.png" width="350" />
-
 Enclaver is an open source toolkit that simplifies packaging and running applications inside [AWS Nitro Enclaves](https://aws.amazon.com/ec2/nitro/nitro-enclaves/). It handles the complexity of enclave networking (ingress/egress proxies), cryptographic attestation, secure key management (KMS integration), host-backed directory mounts, and application lifecycle management, so you can focus on building your application.
 
-This is the **Sparsity edition** of Enclaver, which adds support for Ethereum signing, P-384 ECDH encryption, S3 persistent storage, and an Internal API for enclave-based applications. See [enclaver-io/enclaver](https://github.com/enclaver-io/enclaver) for the original project.
+This is the **Sparsity edition** of Enclaver. It significantly extends the original project with new enclave runtime capabilities, including a built-in Internal API, Ethereum signing, P-384 ECDH encryption, S3-backed storage, trustless Helios RPC, host-backed directory mounts, and KMS-backed key management. See [enclaver-io/enclaver](https://github.com/enclaver-io/enclaver) for the original project.
+
+## Enclaver Highlights
+
+- **Secure Internal API**: Gives enclave apps built-in APIs for attestation, randomness, signing, encryption, and storage operations, so application code can call localhost HTTP endpoints instead of integrating the AWS NSM SDK directly.
+- **Ingress and egress control**: Routes inbound traffic into the enclave and outbound HTTP/HTTPS traffic through explicit proxy and policy layers.
+- **Host-backed storage**: Exposes host-backed directory mounts inside the enclave as normal filesystem paths for application code.
+- **Runtime supervision**: Starts the app, streams logs, reports exit status, and keeps the enclave wall clock synchronized with the host.
+- **Ethereum signing**: Adds secp256k1-based signing flows for enclave applications and internal APIs.
+- **Trustless Helios RPC**: Runs Helios light-client RPC inside the enclave for Ethereum and OP Stack workloads.
+- **S3-backed storage**: Supports encrypted object storage flows for enclave applications.
+- **KMS-backed key management**: Integrates external KMS-backed signing and derivation flows into the enclave runtime.
+
+## Enclaver Runtime Architecture
+
+The diagram below shows the runtime component relationships across the host container, the enclave, Odyn, and the main integrations.
+
+![Enclaver runtime architecture](docs/img/diagram-enclaver-components.svg)
 
 ## Installation
 
@@ -15,25 +30,6 @@ Run this command to install the latest version of the `enclaver` CLI tool:
 ## Quick Start
 
 See [examples/hn-fetcher/readme.md](examples/hn-fetcher/readme.md) for a quick start example of building and running an enclave application with Enclaver.
-
-If your application needs a host-backed working directory inside the enclave, declare a mount in `enclaver.yaml` and bind it at runtime:
-
-```yaml
-storage:
-  mounts:
-    - name: appdata
-      mount_path: /mnt/appdata
-      required: true
-      size_mb: 10240
-```
-
-```bash
-sudo enclaver run -f enclaver.yaml --mount appdata=/var/lib/my-service/appdata
-```
-
-Enclaver will create or reuse `/var/lib/my-service/appdata/.enclaver-hostfs/disk.img` and mount it inside the enclave at `/mnt/appdata`. If you reuse the same host state directory across runs, the contents persist; if you discard that host directory, the mount behaves like a host-backed temporary directory. For the full design and security model, see [Host-Backed Directory Mounts](docs/host_backed_mounts_design.md).
-
-Multiple `enclaver run` processes can coexist on the same EC2 instance. `enclaver-run` assigns each enclave a managed CID and derives host-side VSOCK listeners for egress, clock sync, and hostfs from the managed enclave CID, so those runtime services do not collide across Enclaver instances. Normal Docker-published TCP ports still need to be unique per container.
 
 For runtime configuration and feature-specific guides, use the links in the documentation section below.
 
@@ -78,10 +74,6 @@ See [docs/http_proxy_support_guidance_for_enclave_applications.md](docs/http_pro
 
 
 ## Container and EIF Layout
-
-The diagram below shows the runtime component relationships across the host container, the enclave, Odyn, and the main integrations.
-
-![Enclaver runtime architecture](docs/img/diagram-enclaver-components.svg)
 
 The ASCII view below keeps the original file/layout-oriented perspective: what the release image contains, how `enclaver-run` launches the EIF, and what is embedded inside the enclave image.
 

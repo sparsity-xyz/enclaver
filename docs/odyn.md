@@ -306,7 +306,7 @@ storage:
 
 Example:
 ```text
-/opt/nova/deployments/deployment-399/file-proxy/appdata/
+/var/lib/my-service/appdata/
 `- .enclaver-hostfs/
    |- disk.img
    |- lock

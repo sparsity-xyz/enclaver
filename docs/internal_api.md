@@ -1,6 +1,9 @@
 # Enclaver Internal API
 
-Enclaver exposes localhost-only HTTP APIs inside the enclave.
+Enclaver exposes localhost-only HTTP APIs inside the enclave. One of the main
+goals is to let enclave applications consume attestation, randomness, signing,
+and related secure runtime capabilities over HTTP, instead of integrating the
+AWS NSM SDK directly into application code.
 
 There are two services:
 

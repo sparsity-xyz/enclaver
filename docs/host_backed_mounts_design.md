@@ -4,11 +4,11 @@ This guide explains how to give an enclave application a normal writable
 directory such as `/mnt/appdata`, while storing the actual bytes on the parent
 instance.
 
-Nova Platform refers to the same capability as a Host-Backed Temporary
-Directory Mount. In Enclaver, the feature is configured with a
-manifest-declared `storage.mounts[]` entry plus a runtime
-`--mount <name>=<host_state_dir>` binding, exposed through the hostfs file
-proxy.
+In Enclaver, the feature is configured with a manifest-declared
+`storage.mounts[]` entry plus a runtime `--mount <name>=<host_state_dir>`
+binding, exposed through the hostfs file proxy. If you discard the bound host
+state directory between runs, the same mechanism behaves like a host-backed
+temporary directory.
 
 Whether the mount behaves as "temporary" or "persistent" depends on the
 lifecycle of the bound `host_state_dir`. Reuse the same directory and Enclaver
@@ -66,13 +66,13 @@ Enclaver stores its runtime metadata under a hidden directory:
 For example, if you bind:
 
 ```bash
---mount appdata=/opt/nova/deployments/deployment-399/file-proxy/appdata
+--mount appdata=/var/lib/my-service/appdata
 ```
 
 then the backing image lives at:
 
 ```text
-/opt/nova/deployments/deployment-399/file-proxy/appdata/.enclaver-hostfs/disk.img
+/var/lib/my-service/appdata/.enclaver-hostfs/disk.img
 ```
 
 What these files are:
