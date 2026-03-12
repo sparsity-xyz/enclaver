@@ -821,6 +821,21 @@ mod tests {
             detailed_architecture_doc.contains("20000 + (CID * 128) + 0"),
             "detailed architecture docs should list the CID-derived egress port formula"
         );
+
+        let hn_fetcher_doc = read("examples/hn-fetcher/readme.md");
+        assert!(
+            hn_fetcher_doc.contains("#odyn: \"odyn:latest\""),
+            "hn-fetcher example README should match the checked-in example manifest's odyn override comment"
+        );
+        assert!(
+            hn_fetcher_doc.contains("curl http://localhost:9001/v1/encryption/public_key"),
+            "hn-fetcher example README should document the aux API encryption public key endpoint"
+        );
+        assert!(
+            hn_fetcher_doc.contains("removing `public_key` before forwarding")
+                && hn_fetcher_doc.contains("`nonce` and `user_data` are preserved"),
+            "hn-fetcher example README should describe the current aux API attestation sanitization behavior"
+        );
     }
 
     #[test]
