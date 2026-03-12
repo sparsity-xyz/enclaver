@@ -618,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn release_workflow_does_not_publish_nitro_cli_image() {
+    fn release_workflow_matches_current_amd64_only_release_contract() {
         let path = repo_root().join(".github/workflows/release.yaml");
         let contents =
             fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
@@ -630,6 +630,60 @@ mod tests {
         assert!(
             !contents.contains("scripts/validate-nitro-cli-image.sh"),
             "release workflow should not run the manual nitro-cli validation/publish flow"
+        );
+        assert!(
+            contents.contains("target: 'x86_64-unknown-linux-musl'"),
+            "release workflow should still build the x86_64 release binaries"
+        );
+        assert!(
+            !contents.contains("target: 'aarch64-unknown-linux-musl'"),
+            "release workflow should not build aarch64 release binaries"
+        );
+        assert!(
+            contents.contains("mv x86_64-unknown-linux-musl amd64"),
+            "release workflow should rearrange only the x86_64 release artifacts for image publishing"
+        );
+        assert!(
+            !contents.contains("mv aarch64-unknown-linux-musl arm64"),
+            "release workflow should not rearrange arm64 release artifacts"
+        );
+
+        let mut current_file = None;
+        let mut odyn_platforms = None;
+        let mut sleeve_platforms = None;
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("file:") {
+                current_file = Some(rest.trim());
+                continue;
+            }
+
+            let Some(rest) = trimmed.strip_prefix("platforms:") else {
+                continue;
+            };
+
+            match current_file {
+                Some("odyn-release.dockerfile") => odyn_platforms = Some(rest.trim()),
+                Some("sleeve-release.dockerfile") => sleeve_platforms = Some(rest.trim()),
+                _ => {}
+            }
+        }
+
+        assert!(
+            odyn_platforms == Some("linux/amd64"),
+            "release workflow should publish odyn only for linux/amd64"
+        );
+        assert!(
+            !odyn_platforms.is_some_and(|platforms| platforms.contains("linux/arm64")),
+            "release workflow should not try to publish odyn for linux/arm64"
+        );
+        assert!(
+            sleeve_platforms == Some("linux/amd64"),
+            "release workflow should publish sleeve only for linux/amd64 because nitro-cli is linux/amd64 only"
+        );
+        assert!(
+            !sleeve_platforms.is_some_and(|platforms| platforms.contains("linux/arm64")),
+            "release workflow should not try to publish sleeve for linux/arm64"
         );
     }
 
@@ -667,6 +721,42 @@ mod tests {
         assert!(
             base_images_doc.contains("linux/amd64"),
             "base image docs should state that Nitro CLI publishing is linux/amd64 only"
+        );
+        assert!(
+            base_images_doc.contains("published Odyn image is currently `linux/amd64` only"),
+            "base image docs should state that Odyn publishing is currently linux/amd64 only"
+        );
+        assert!(
+            base_images_doc.contains("published Sleeve image is currently `linux/amd64` only"),
+            "base image docs should state that Sleeve publishing is currently linux/amd64 only"
+        );
+
+        let image_build_doc = read("docs/BUILDING_IMAGES.md");
+        assert!(
+            image_build_doc.contains("The helper is currently `x86_64`-only"),
+            "image build docs should explain that the default local sleeve helper currently requires x86_64"
+        );
+        assert!(
+            image_build_doc.contains("--file dockerfiles/odyn-release.dockerfile")
+                && image_build_doc.contains("--platform linux/amd64")
+                && image_build_doc.contains("-t odyn:local ."),
+            "image build docs should show odyn release builds as linux/amd64 only"
+        );
+        assert!(
+            image_build_doc.contains("--file dockerfiles/sleeve-release.dockerfile")
+                && image_build_doc.contains("--platform linux/amd64")
+                && image_build_doc.contains("-t sleeve:local ."),
+            "image build docs should show sleeve release builds as linux/amd64 only"
+        );
+
+        let ci_doc = read("docs/ci.md");
+        assert!(
+            !ci_doc.contains("aarch64-unknown-linux-musl"),
+            "CI docs should not describe aarch64 release binaries anymore"
+        );
+        assert!(
+            ci_doc.contains("packages only the `x86_64` `enclaver` binary into a release tarball"),
+            "CI docs should describe the x86_64-only release artifact packaging"
         );
 
         let nitro_cli_doc = read("docs/nitro_cli_fuse_image.md");

@@ -44,6 +44,9 @@ Local tags used by repository tooling:
 - debug helper build: `odyn-dev:latest`
 - release-style local build: `odyn:latest`
 
+The published Odyn image is currently `linux/amd64` only to match the current
+release-image publish policy.
+
 ### Sleeve image
 
 Purpose:
@@ -63,6 +66,11 @@ Local tags used by repository tooling:
 
 - debug helper build: `sleeve-dev:latest`
 - release-style local build: `sleeve:latest`
+
+The published Sleeve image is currently `linux/amd64` only. Sleeve embeds
+`nitro-cli` and its runtime libraries from the self-hosted Nitro CLI image, so
+its published platforms currently follow the Nitro CLI image's `linux/amd64`
+limit.
 
 ## How the images are used
 

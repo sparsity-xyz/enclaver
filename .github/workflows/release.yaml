@@ -34,10 +34,6 @@ jobs:
             host: 'ubuntu-latest'
             uses_musl: true
             extra_cargo_args: '--features=run_enclave,odyn'
-          - target: 'aarch64-unknown-linux-musl'
-            host: 'ubuntu-latest'
-            uses_musl: true
-            extra_cargo_args: '--features=run_enclave,odyn'
 
     runs-on: ${{ matrix.host }}
 
@@ -47,14 +43,14 @@ jobs:
       attestations: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache release target directory
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: enclaver/target
           key: ${{ runner.os }}-release-target-${{ matrix.target }}-${{ hashFiles('enclaver/Cargo.lock') }}
@@ -128,8 +124,7 @@ jobs:
         shell: bash
         run: |
           mv x86_64-unknown-linux-musl amd64
-          mv aarch64-unknown-linux-musl arm64
-          chmod 755 amd64/odyn amd64/enclaver-run arm64/odyn arm64/enclaver-run
+          chmod 755 amd64/odyn amd64/enclaver-run
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -165,7 +160,7 @@ jobs:
           context: "{{defaultContext}}:dockerfiles"
           build-contexts: artifacts=.
           file: odyn-release.dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.odyn-metadata.outputs.tags }}
 
@@ -195,7 +190,7 @@ jobs:
           context: "{{defaultContext}}:dockerfiles"
           build-contexts: artifacts=.
           file: sleeve-release.dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.sleeve-metadata.outputs.tags }}
 
@@ -222,9 +217,6 @@ jobs:
           - target: 'x86_64-unknown-linux-musl'
             release_name: 'enclaver-linux-x86_64'
             delay: 60
-          - target: 'aarch64-unknown-linux-musl'
-            release_name: 'enclaver-linux-aarch64'
-            delay: 120
 
     steps:
       - name: Download Binaries

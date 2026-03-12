@@ -102,10 +102,9 @@ Jobs:
 1. `build-release-binaries`
    - targets:
      - `x86_64-unknown-linux-musl`
-     - `aarch64-unknown-linux-musl`
    - builds with `--features=run_enclave,odyn`
    - uses `./.github/actions/cargo-zigbuild` for musl builds
-   - uploads three binaries per target:
+   - uploads three binaries:
      - `enclaver`
      - `enclaver-run`
      - `odyn`
@@ -118,7 +117,6 @@ Jobs:
    - downloads build artifacts
    - renames target directories to Docker architecture names:
      - `x86_64-unknown-linux-musl` -> `amd64`
-     - `aarch64-unknown-linux-musl` -> `arm64`
    - publishes only these runtime images:
      - `public.ecr.aws/d4t4u8d2/sparsity-ai/odyn`
      - `public.ecr.aws/d4t4u8d2/sparsity-ai/sleeve`
@@ -128,7 +126,7 @@ Jobs:
    - runs when either:
      - the repo is `sparsity-xyz/enclaver` and the ref is a tag
      - a manual dispatch sets `upload_artifacts=true`
-   - packages only the `enclaver` binary into release tarballs
+   - packages only the `x86_64` `enclaver` binary into a release tarball
    - uploads draft GitHub Release assets plus matching SHA256 files
 
 Notably:
@@ -151,19 +149,19 @@ cargo zigbuild --release \
   --features=run_enclave,odyn
 ```
 
-Build release images locally after arranging `amd64/` and `arm64/` artifact directories:
+Build release images locally after arranging the `amd64/` artifact directory:
 
 ```bash
 docker buildx build \
   --file dockerfiles/odyn-release.dockerfile \
   --build-context artifacts=. \
-  --platform linux/amd64,linux/arm64 \
+  --platform linux/amd64 \
   -t odyn:local .
 
 docker buildx build \
   --file dockerfiles/sleeve-release.dockerfile \
   --build-context artifacts=. \
-  --platform linux/amd64,linux/arm64 \
+  --platform linux/amd64 \
   -t sleeve:local .
 ```
 
@@ -172,6 +170,9 @@ Build and validate the amd64-only Nitro CLI image locally:
 ```bash
 ./scripts/build-and-publish-nitro-cli.sh --tag latest
 ```
+
+The official release workflow currently publishes both Odyn and Sleeve only for
+`linux/amd64`.
 
 ## AWS prerequisites for `publish-images`
 
