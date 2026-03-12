@@ -712,8 +712,7 @@ mod tests {
 
         let hostfs_doc = read("docs/host_backed_mounts_design.md");
         assert!(
-            hostfs_doc.contains("Host-Backed Temporary")
-                && hostfs_doc.contains("Directory Mount"),
+            hostfs_doc.contains("Host-Backed Temporary") && hostfs_doc.contains("Directory Mount"),
             "hostfs design doc should note the Nova-style temporary-directory terminology"
         );
         assert!(
