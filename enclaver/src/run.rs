@@ -193,14 +193,8 @@ impl Enclave {
             enclave_info.id, enclave_info.cid
         );
 
-        if self.debug_mode {
-            // TODO: Should we let an an EOF from the console terminate run?
-            self.attach_debug_console(&enclave_info.id).await?;
-        }
-
-        self.start_odyn_log_stream(enclave_info.cid)?;
-
-        self.start_ingress_proxies(enclave_info.cid).await?;
+        self.complete_post_start_setup_or_cleanup(&enclave_info)
+            .await?;
 
         let exit_res = tokio::select! {
             exit_res = Enclave::await_exit(enclave_info.cid, STATUS_PORT) =>
@@ -210,23 +204,7 @@ impl Enclave {
                 Ok(EnclaveExitStatus::Cancelled),
         };
 
-        if let Err(err) = self.cleanup_running_state().await {
-            error!("error terminating enclave: {err}");
-        }
-
-        match exit_res {
-            Ok(EnclaveExitStatus::Exited(code)) => info!("enclave exited with code {code}"),
-            Ok(EnclaveExitStatus::Signaled(signal)) => {
-                info!("enclave stopped due to signal {signal}")
-            }
-            Ok(EnclaveExitStatus::Fatal(ref error)) => {
-                info!("enclave exited due to fatal error: {error}")
-            }
-            Ok(EnclaveExitStatus::Cancelled) => (),
-            Err(ref err) => error!("error waiting for enclave exit: {err}"),
-        };
-
-        exit_res
+        self.finalize_exit_and_cleanup(exit_res).await
     }
 
     async fn prepare_host_runtime(
@@ -560,6 +538,66 @@ impl Enclave {
         Ok(())
     }
 
+    async fn complete_post_start_setup(&mut self, enclave_info: &EnclaveInfo) -> Result<()> {
+        if self.debug_mode {
+            // TODO: Should we let an EOF from the console terminate run?
+            self.attach_debug_console(&enclave_info.id).await?;
+        }
+
+        self.start_odyn_log_stream(enclave_info.cid)?;
+        self.start_ingress_proxies(enclave_info.cid).await
+    }
+
+    async fn complete_post_start_setup_or_cleanup(
+        &mut self,
+        enclave_info: &EnclaveInfo,
+    ) -> Result<()> {
+        let setup_result = self.complete_post_start_setup(enclave_info).await;
+        let Err(err) = setup_result else {
+            return Ok(());
+        };
+
+        let setup_err = err.context(format!(
+            "failed to finish post-start host setup for enclave {}",
+            enclave_info.id
+        ));
+        match self.cleanup_running_state().await {
+            Ok(()) => Err(setup_err),
+            Err(cleanup_err) => Err(cleanup_err.context(format!(
+                "failed to clean up after post-start setup failure for enclave {}: {setup_err:#}",
+                enclave_info.id
+            ))),
+        }
+    }
+
+    async fn finalize_exit_and_cleanup(
+        &mut self,
+        exit_res: Result<EnclaveExitStatus>,
+    ) -> Result<EnclaveExitStatus> {
+        let cleanup_result = self.cleanup_running_state().await;
+
+        match (exit_res, cleanup_result) {
+            (Ok(status), Ok(())) => {
+                log_enclave_exit_status(&status);
+                Ok(status)
+            }
+            (Err(err), Ok(())) => {
+                error!("error waiting for enclave exit: {err}");
+                Err(err)
+            }
+            (Ok(status), Err(cleanup_err)) => {
+                log_enclave_exit_status(&status);
+                Err(cleanup_err.context(format!(
+                    "enclave {} but cleanup failed",
+                    describe_enclave_exit_status(&status)
+                )))
+            }
+            (Err(err), Err(cleanup_err)) => Err(cleanup_err.context(format!(
+                "cleanup failed after waiting for enclave exit also failed: {err:#}"
+            ))),
+        }
+    }
+
     async fn cleanup_running_state(&mut self) -> Result<()> {
         // Best-effort cleanup: always tear down local runtime state, but keep
         // the enclave ID if terminate-enclave fails so the caller still knows
@@ -603,6 +641,28 @@ impl Enclave {
                 }
             };
         }
+    }
+}
+
+fn describe_enclave_exit_status(status: &EnclaveExitStatus) -> String {
+    match status {
+        EnclaveExitStatus::Exited(code) => format!("exited with code {code}"),
+        EnclaveExitStatus::Signaled(signal) => format!("stopped due to signal {signal}"),
+        EnclaveExitStatus::Fatal(error) => format!("exited due to fatal error: {error}"),
+        EnclaveExitStatus::Cancelled => "was cancelled".to_string(),
+    }
+}
+
+fn log_enclave_exit_status(status: &EnclaveExitStatus) {
+    match status {
+        EnclaveExitStatus::Exited(code) => info!("enclave exited with code {code}"),
+        EnclaveExitStatus::Signaled(signal) => {
+            info!("enclave stopped due to signal {signal}")
+        }
+        EnclaveExitStatus::Fatal(error) => {
+            info!("enclave exited due to fatal error: {error}")
+        }
+        EnclaveExitStatus::Cancelled => {}
     }
 }
 
@@ -750,13 +810,16 @@ async fn handle_time_request(stream: tokio_vsock::VsockStream) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{Manifest, Sources};
+    use crate::manifest::{Ingress, Manifest, Sources};
     use crate::nitro_cli::NitroCliCommandFailure;
     use crate::runtime_vsock::RuntimeHostVsockPorts;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::ExitStatusExt;
     use std::process::Stdio;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use tempfile::tempdir;
     use tokio::process::Command;
 
     struct FlagOnDrop(Arc<AtomicBool>);
@@ -788,6 +851,31 @@ mod tests {
             helios_rpc: None,
             clock_sync: None,
         }
+    }
+
+    fn write_mock_nitro_cli() -> std::path::PathBuf {
+        let dir = tempdir().expect("create tempdir");
+        let script_path = dir.path().join("nitro-cli");
+        fs::write(
+            &script_path,
+            r#"#!/bin/sh
+if [ "$1" = "terminate-enclave" ]; then
+  printf '{"EnclaveID":"enc-test","Terminated":true}\n'
+  exit 0
+fi
+echo "unexpected nitro-cli args: $*" >&2
+exit 1
+"#,
+        )
+        .expect("write mock nitro-cli");
+        let mut perms = fs::metadata(&script_path)
+            .expect("stat mock nitro-cli")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("chmod mock nitro-cli");
+        let path = script_path.clone();
+        std::mem::forget(dir);
+        path
     }
 
     #[test]
@@ -914,6 +1002,80 @@ mod tests {
         assert!(enclave.debug_console.is_none());
         assert!(enclave.tasks.is_empty());
         assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn post_start_setup_failure_triggers_cleanup() {
+        let ingress_conflict =
+            std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve ingress port");
+        let ingress_port = ingress_conflict.local_addr().expect("ingress addr").port();
+
+        let enclave_info = EnclaveInfo {
+            name: "test".to_string(),
+            id: "enc-test".to_string(),
+            process_id: 1234,
+            cid: 16,
+        };
+        let mut manifest = minimal_manifest();
+        manifest.ingress = Some(vec![Ingress {
+            listen_port: ingress_port,
+        }]);
+
+        let mut enclave = Enclave {
+            cli: NitroCLI::with_program(write_mock_nitro_cli().display().to_string()),
+            eif_path: PathBuf::from("/tmp/test.eif"),
+            manifest,
+            cpu_count: 2,
+            memory_mb: 4096,
+            debug_mode: false,
+            enclave_info: Some(enclave_info.clone()),
+            runtime_vsock: Some(RuntimeHostVsockPorts::for_cid(enclave_info.cid).unwrap()),
+            debug_console: None,
+            tasks: Vec::new(),
+        };
+
+        let err = enclave
+            .complete_post_start_setup_or_cleanup(&enclave_info)
+            .await
+            .expect_err("ingress bind failure should abort post-start setup");
+        assert!(
+            err.to_string()
+                .contains("failed to finish post-start host setup")
+        );
+        assert!(enclave.enclave_info.is_none());
+        assert!(enclave.runtime_vsock.is_none());
+        assert!(enclave.tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn finalize_exit_and_cleanup_returns_error_when_cleanup_fails() {
+        let enclave_info = EnclaveInfo {
+            name: "test".to_string(),
+            id: "enc-test".to_string(),
+            process_id: 1234,
+            cid: 16,
+        };
+        let mut enclave = Enclave {
+            cli: NitroCLI::with_program("/definitely/missing/nitro-cli"),
+            eif_path: PathBuf::from("/tmp/test.eif"),
+            manifest: minimal_manifest(),
+            cpu_count: 2,
+            memory_mb: 4096,
+            debug_mode: false,
+            enclave_info: Some(enclave_info.clone()),
+            runtime_vsock: Some(RuntimeHostVsockPorts::for_cid(enclave_info.cid).unwrap()),
+            debug_console: None,
+            tasks: Vec::new(),
+        };
+
+        let err = enclave
+            .finalize_exit_and_cleanup(Ok(EnclaveExitStatus::Exited(0)))
+            .await
+            .expect_err("cleanup failure should propagate to the caller");
+        let rendered = err.to_string();
+        assert!(rendered.contains("cleanup failed"));
+        assert!(rendered.contains("exited with code 0"));
+        assert_eq!(enclave.enclave_info, Some(enclave_info));
     }
 }
 
