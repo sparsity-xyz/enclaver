@@ -35,6 +35,13 @@ impl NitroCLI {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_program(program: impl Into<String>) -> Self {
+        Self {
+            program: program.into(),
+        }
+    }
+
     pub async fn run_and_deserialize_output<T>(&self, args: impl NitroCLIArgs) -> Result<T>
     where
         T: serde::de::DeserializeOwned,

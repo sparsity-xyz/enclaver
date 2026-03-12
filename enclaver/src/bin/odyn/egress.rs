@@ -31,7 +31,6 @@ impl EgressService {
             let host_egress_port = runtime_vsock.egress_port;
 
             let proxy = EnclaveHttpProxy::bind(proxy_port).await?;
-            set_proxy_env_vars(config)?;
 
             Some(tokio::task::spawn(async move {
                 proxy.serve(host_egress_port, policy).await;
@@ -49,15 +48,4 @@ impl EgressService {
             _ = proxy.await;
         }
     }
-}
-
-fn set_proxy_env_vars(config: &Configuration) -> Result<()> {
-    unsafe {
-        // SAFETY: While not 100% b/c it is a multi-threaded program, with 3rd party code,
-        // we only get/set env vars in a ::start() methods that are serialized via .await.
-        for (name, value) in config.egress_proxy_env_vars()? {
-            std::env::set_var(name, value);
-        }
-    }
-    Ok(())
 }

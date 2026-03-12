@@ -111,6 +111,18 @@ async fn start_api_stack(
     }
 }
 
+fn install_egress_proxy_env_before_runtime(config: &Configuration) -> Result<()> {
+    unsafe {
+        // SAFETY: This runs in the synchronous startup path before the Tokio
+        // runtime is created, so no worker threads or async tasks can observe
+        // partially updated process-global environment variables.
+        for (name, value) in config.egress_proxy_env_vars()? {
+            std::env::set_var(name, value);
+        }
+    }
+    Ok(())
+}
+
 fn log_launch_plan(
     config: &Configuration,
     args: &CliArgs,
@@ -201,8 +213,7 @@ fn log_launch_plan(
     Ok(())
 }
 
-async fn launch(args: &CliArgs) -> Result<launcher::ExitStatus> {
-    let config = Arc::new(Configuration::load(&args.config_dir).await?);
+async fn launch(args: &CliArgs, config: Arc<Configuration>) -> Result<launcher::ExitStatus> {
     let nsm = Arc::new(Nsm::new());
 
     if !args.no_bootstrap {
@@ -268,7 +279,7 @@ async fn launch(args: &CliArgs) -> Result<launcher::ExitStatus> {
     launch_result
 }
 
-async fn run(args: &CliArgs) -> Result<()> {
+async fn run(args: &CliArgs, config: Arc<Configuration>) -> Result<()> {
     // Start the status and logs listeners ASAP so that if we fail to
     // initialize, we can communicate the status and stream the logs
     let app_status = AppStatus::new();
@@ -280,7 +291,7 @@ async fn run(args: &CliArgs) -> Result<()> {
         console_task = Some(app_log.start_serving(APP_LOG_PORT));
     }
 
-    match launch(args).await {
+    match launch(args, config).await {
         Ok(exit_status) => app_status.exited(exit_status),
         Err(err) => app_status.fatal(format_fatal_error(&err)),
     };
@@ -295,10 +306,21 @@ async fn run(args: &CliArgs) -> Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = CliArgs::parse();
     enclaver::utils::init_logging(args.verbosity);
+
+    let config = match Configuration::load_blocking(&args.config_dir) {
+        Ok(config) => config,
+        Err(err) => {
+            error!("Error: {err:#}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(err) = install_egress_proxy_env_before_runtime(&config) {
+        error!("Error: {err:#}");
+        std::process::exit(1);
+    }
 
     #[cfg(feature = "tracing")]
     console_subscriber::ConsoleLayer::builder()
@@ -306,7 +328,12 @@ async fn main() {
         .server_addr(([0, 0, 0, 0], 51000))
         .init();
 
-    if let Err(err) = run(&args).await {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build Tokio runtime");
+
+    if let Err(err) = runtime.block_on(run(&args, Arc::new(config))) {
         error!("Error: {err:#}");
         std::process::exit(1);
     }

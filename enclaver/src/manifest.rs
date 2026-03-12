@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::Read as _;
 use std::path::PathBuf;
 
 use crate::constants::KMS_REGISTRY_HELIOS_PORT;
@@ -619,6 +620,19 @@ pub async fn load_manifest<P: AsRef<Path>>(path: P) -> Result<Manifest> {
     let (_, manifest) = load_manifest_raw(path).await?;
 
     Ok(manifest)
+}
+
+pub fn load_manifest_sync<P: AsRef<Path>>(path: P) -> Result<Manifest> {
+    let mut buf = Vec::new();
+    if path.as_ref() == Path::new("-") {
+        std::io::stdin().read_to_end(&mut buf)?;
+    } else {
+        buf = std::fs::read(&path)
+            .map_err(|err| anyhow!("failed to open {}: {err}", path.as_ref().display()))?;
+    }
+
+    parse_manifest(&buf)
+        .map_err(|e| anyhow!("invalid configuration in {}: {e}", path.as_ref().display()))
 }
 
 #[cfg(test)]

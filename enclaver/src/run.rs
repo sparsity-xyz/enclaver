@@ -5,7 +5,7 @@ use crate::hostfs::CONTAINER_HOSTFS_ROOT;
 use crate::manifest::{Defaults, Manifest, load_manifest};
 use crate::runtime_vsock::{RuntimeHostVsockPorts, allocate_managed_enclave_cid};
 use crate::utils;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use futures_util::stream::StreamExt;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -547,18 +547,27 @@ impl Enclave {
     }
 
     async fn cleanup_running_state(&mut self) -> Result<()> {
-        if let Some(enclave_info) = self.enclave_info.take() {
+        // Best-effort cleanup: always tear down local runtime state, but keep
+        // the enclave ID if terminate-enclave fails so the caller still knows
+        // which enclave remained running.
+        let terminate_result = if let Some(enclave_info) = self.enclave_info.as_ref() {
             debug!("terminating enclave");
-            self.cli.terminate_enclave(&enclave_info.id).await?;
+            self.cli
+                .terminate_enclave(&enclave_info.id)
+                .await
+                .context(format!("failed to terminate enclave {}", enclave_info.id))
         } else {
             debug!("no enclave to stop");
-        }
-
+            Ok(())
+        };
         self.stop_debug_console().await;
         self.runtime_vsock = None;
         self.abort_tasks().await;
+        if terminate_result.is_ok() {
+            self.enclave_info = None;
+        }
 
-        Ok(())
+        terminate_result
     }
 
     async fn stop_debug_console(&mut self) {
@@ -723,11 +732,45 @@ async fn handle_time_request(stream: tokio_vsock::VsockStream) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::{Manifest, Sources};
     use crate::nitro_cli::NitroCliCommandFailure;
     use crate::runtime_vsock::RuntimeHostVsockPorts;
     use std::os::unix::process::ExitStatusExt;
     use std::process::Stdio;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::process::Command;
+
+    struct FlagOnDrop(Arc<AtomicBool>);
+
+    impl Drop for FlagOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn minimal_manifest() -> Manifest {
+        Manifest {
+            version: "v1".to_string(),
+            name: "test".to_string(),
+            target: "target:latest".to_string(),
+            sources: Sources {
+                app: "app:latest".to_string(),
+                odyn: None,
+                sleeve: None,
+            },
+            signature: None,
+            ingress: None,
+            egress: None,
+            defaults: None,
+            api: None,
+            aux_api: None,
+            storage: None,
+            kms_integration: None,
+            helios_rpc: None,
+            clock_sync: None,
+        }
+    }
 
     #[test]
     fn managed_cid_conflict_detection_requires_nitro_cli_stderr_match() {
@@ -795,6 +838,54 @@ mod tests {
             .expect("stop child");
 
         assert!(child.try_wait().expect("query child state").is_some());
+    }
+
+    #[tokio::test]
+    async fn cleanup_running_state_preserves_enclave_info_when_terminate_fails() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = FlagOnDrop(dropped.clone());
+        let task = tokio::spawn(async move {
+            let _guard = guard;
+            futures_util::future::pending::<()>().await;
+        });
+
+        let debug_console = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn debug console child");
+
+        let enclave_info = EnclaveInfo {
+            name: "test".to_string(),
+            id: "enc-test".to_string(),
+            process_id: 1234,
+            cid: 16,
+        };
+        let mut enclave = Enclave {
+            cli: NitroCLI::with_program("/definitely/missing/nitro-cli"),
+            eif_path: PathBuf::from("/tmp/test.eif"),
+            manifest: minimal_manifest(),
+            cpu_count: 2,
+            memory_mb: 4096,
+            debug_mode: true,
+            enclave_info: Some(enclave_info.clone()),
+            runtime_vsock: Some(RuntimeHostVsockPorts::for_cid(enclave_info.cid).unwrap()),
+            debug_console: Some(debug_console),
+            tasks: vec![task],
+        };
+
+        let err = enclave
+            .cleanup_running_state()
+            .await
+            .expect_err("terminate-enclave should fail for a missing nitro-cli binary");
+        assert!(err.to_string().contains("failed to terminate enclave"));
+        assert_eq!(enclave.enclave_info, Some(enclave_info));
+        assert!(enclave.runtime_vsock.is_none());
+        assert!(enclave.debug_console.is_none());
+        assert!(enclave.tasks.is_empty());
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }
 

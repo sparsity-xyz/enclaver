@@ -25,25 +25,34 @@ pub struct Configuration {
 }
 
 impl Configuration {
+    fn from_manifest(config_dir: &Path, manifest: Manifest) -> Self {
+        let listener_ports = manifest
+            .ingress
+            .as_ref()
+            .map(|ingress| ingress.iter().map(|item| item.listen_port).collect())
+            .unwrap_or_default();
+
+        Self {
+            config_dir: config_dir.to_path_buf(),
+            manifest,
+            listener_ports,
+        }
+    }
+
     pub async fn load<P: AsRef<Path>>(config_dir: P) -> Result<Self> {
         let mut manifest_path = config_dir.as_ref().to_path_buf();
         manifest_path.push(MANIFEST_FILE_NAME);
 
         let manifest = enclaver::manifest::load_manifest(&manifest_path).await?;
+        Ok(Self::from_manifest(config_dir.as_ref(), manifest))
+    }
 
-        let mut listener_ports = Vec::new();
+    pub fn load_blocking<P: AsRef<Path>>(config_dir: P) -> Result<Self> {
+        let mut manifest_path = config_dir.as_ref().to_path_buf();
+        manifest_path.push(MANIFEST_FILE_NAME);
 
-        if let Some(ref ingress) = manifest.ingress {
-            for item in ingress {
-                listener_ports.push(item.listen_port);
-            }
-        }
-
-        Ok(Self {
-            config_dir: config_dir.as_ref().to_path_buf(),
-            manifest,
-            listener_ports,
-        })
+        let manifest = enclaver::manifest::load_manifest_sync(&manifest_path)?;
+        Ok(Self::from_manifest(config_dir.as_ref(), manifest))
     }
 
     pub fn egress_proxy_uri(&self) -> Result<Option<Uri>> {
