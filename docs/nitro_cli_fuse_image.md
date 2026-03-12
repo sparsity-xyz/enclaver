@@ -80,7 +80,7 @@ will embed.
 
 ## How We Rebuild The Kernel Blobs
 
-The rebuild happens in `enclaver/dockerfiles/nitro-cli.dockerfile`.
+The rebuild happens in `dockerfiles/nitro-cli.dockerfile`.
 
 The first stage clones the official
 `aws-nitro-enclaves-sdk-bootstrap` repository and runs:
@@ -141,8 +141,8 @@ The full flow for producing the final image is:
 2. install `aws-nitro-enclaves-cli` and `aws-nitro-enclaves-cli-devel`
 3. replace `/usr/share/nitro_enclaves/blobs/*` with the rebuilt artifacts
 4. build the final Nitro CLI Docker image
-5. validate the image with `enclaver/scripts/validate-nitro-cli-image.sh`
-6. optionally publish the image with `enclaver/scripts/build-and-publish-nitro-cli.sh` or the manual GitHub workflow
+5. validate the image with `scripts/validate-nitro-cli-image.sh`
+6. optionally publish the image with `scripts/build-and-publish-nitro-cli.sh` or the manual GitHub workflow
 
 The validation script checks two things:
 
@@ -151,25 +151,24 @@ The validation script checks two things:
 
 ## Local Build Commands
 
-The commands below assume the current working directory is the parent directory
-that contains the `enclaver/` checkout.
+The commands below assume the current working directory is the repository root.
 
 Build the image locally:
 
 ```bash
-docker buildx build -f enclaver/dockerfiles/nitro-cli.dockerfile -t nitro-cli:latest enclaver
+docker buildx build -f dockerfiles/nitro-cli.dockerfile -t nitro-cli:latest .
 ```
 
 Validate it locally:
 
 ```bash
-enclaver/scripts/validate-nitro-cli-image.sh nitro-cli:latest
+scripts/validate-nitro-cli-image.sh nitro-cli:latest
 ```
 
 Build and publish with validation:
 
 ```bash
-enclaver/scripts/build-and-publish-nitro-cli.sh --tag latest
+scripts/build-and-publish-nitro-cli.sh --tag latest
 ```
 
 ## Publishing Model
@@ -178,8 +177,8 @@ The repository does not publish Nitro CLI from the main release workflow.
 
 Nitro CLI is published only when explicitly requested, through:
 
-- `enclaver/scripts/build-and-publish-nitro-cli.sh`
-- `enclaver/.github/workflows/nitro-cli.yaml`
+- `scripts/build-and-publish-nitro-cli.sh`
+- `.github/workflows/nitro-cli.yaml`
 
 That keeps the normal release path small while still allowing us to refresh the
 Nitro CLI image whenever we intentionally update the bootstrap kernel or its
@@ -189,7 +188,7 @@ that environment.
 
 ## Files To Inspect
 
-- `enclaver/dockerfiles/nitro-cli.dockerfile`
-- `enclaver/scripts/validate-nitro-cli-image.sh`
-- `enclaver/scripts/build-and-publish-nitro-cli.sh`
-- `enclaver/.github/workflows/nitro-cli.yaml`
+- `dockerfiles/nitro-cli.dockerfile`
+- `scripts/validate-nitro-cli-image.sh`
+- `scripts/build-and-publish-nitro-cli.sh`
+- `.github/workflows/nitro-cli.yaml`

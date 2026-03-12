@@ -4,11 +4,11 @@ set -euo pipefail
 
 IMAGE_REF="${1:-}"
 SMOKE_TAG="nitro-cli-smoke-app:${RANDOM}-$$"
-TMPDIR="$(mktemp -d)"
+SCRIPT_TMPDIR="$(mktemp -d)"
 
 cleanup() {
     docker image rm -f "${SMOKE_TAG}" >/dev/null 2>&1 || true
-    rm -rf "${TMPDIR}"
+    rm -rf "${SCRIPT_TMPDIR}"
 }
 
 trap cleanup EXIT
@@ -18,12 +18,12 @@ if [[ -z "${IMAGE_REF}" ]]; then
     exit 1
 fi
 
-cat > "${TMPDIR}/Dockerfile" <<'EOF'
+cat > "${SCRIPT_TMPDIR}/Dockerfile" <<'EOF'
 FROM public.ecr.aws/docker/library/alpine:3.20
 CMD ["echo", "nitro-cli smoke test"]
 EOF
 
-docker build -t "${SMOKE_TAG}" "${TMPDIR}" >/dev/null
+docker build -t "${SMOKE_TAG}" "${SCRIPT_TMPDIR}" >/dev/null
 
 docker run --rm --entrypoint /bin/bash "${IMAGE_REF}" -lc '
 set -euo pipefail
@@ -61,14 +61,14 @@ done
 grep -Eq "^CONFIG_FUSE_FS=(y|m)$" "${kernel_cfg}"
 '
 
-mkdir -p "${TMPDIR}/output"
+mkdir -p "${SCRIPT_TMPDIR}/output"
 
 docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "${TMPDIR}/output:/build" \
+    -v "${SCRIPT_TMPDIR}/output:/build" \
     "${IMAGE_REF}" \
     build-enclave \
     --docker-uri "${SMOKE_TAG}" \
     --output-file /build/smoke.eif >/dev/null
 
-test -s "${TMPDIR}/output/smoke.eif"
+test -s "${SCRIPT_TMPDIR}/output/smoke.eif"

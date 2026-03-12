@@ -528,8 +528,8 @@ mod tests {
             "nitro-cli image should rewrite the upstream kernel config before rebuilding blobs"
         );
         assert!(
-            contents.contains("CONFIG_FUSE_FS=y"),
-            "nitro-cli image should hardcode the FUSE config toggle in the build step"
+            contents.contains("s|^CONFIG_FUSE_FS=.*$|CONFIG_FUSE_FS=y|"),
+            "nitro-cli image should force any existing CONFIG_FUSE_FS setting to CONFIG_FUSE_FS=y"
         );
     }
 
