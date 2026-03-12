@@ -166,7 +166,7 @@ docker buildx build \
   -t sleeve:local .
 ```
 
-Build and validate the Nitro CLI image locally:
+Build and validate the amd64-only Nitro CLI image locally:
 
 ```bash
 ./scripts/build-and-publish-nitro-cli.sh --tag latest

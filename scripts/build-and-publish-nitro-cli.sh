@@ -7,10 +7,10 @@
 # This script:
 #   1. Authenticates Docker to AWS Public ECR
 #   2. Creates the ECR repository if it doesn't exist
-#   3. Builds a local validation image for the current architecture
+#   3. Builds a local validation image for linux/amd64
 #   4. Verifies the image ships a FUSE-enabled enclave kernel
-#   5. Builds the nitro-cli image for linux/amd64 and linux/arm64
-#   6. Pushes the multi-arch image to ECR
+#   5. Builds the nitro-cli image for linux/amd64
+#   6. Pushes the amd64 image to ECR
 #
 # Prerequisites:
 #   - AWS CLI configured with appropriate credentials
@@ -94,20 +94,15 @@ done
 
 FULL_IMAGE_URI="${REGISTRY}/${REPO_NAME}"
 VALIDATION_IMAGE_URI="${FULL_IMAGE_URI}:validate-${TAG}"
+VALIDATION_PLATFORM="linux/amd64"
+PUBLISH_PLATFORM="linux/amd64"
 
 local_arch=$(uname -m)
-case "${local_arch}" in
-    x86_64)
-        validation_platform="linux/amd64"
-        ;;
-    aarch64)
-        validation_platform="linux/arm64"
-        ;;
-    *)
-        log_error "Unsupported architecture for validation: ${local_arch}"
-        exit 1
-        ;;
-esac
+if [[ "${local_arch}" != "x86_64" ]]; then
+    log_error "nitro-cli publishing is currently supported only on x86_64 hosts."
+    log_error "The published nitro-cli image is restricted to ${PUBLISH_PLATFORM}."
+    exit 1
+fi
 
 log_info "Building nitro-cli image..."
 log_info "  Dockerfile: ${DOCKERFILE_PATH}"
@@ -150,7 +145,7 @@ else
     log_info "Repository already exists: ${REPO_NAME}"
 fi
 
-# Step 3: Set up buildx builder for multi-arch builds
+# Step 3: Set up buildx builder
 BUILDER_NAME="nitro-cli-builder"
 if ! docker buildx inspect "${BUILDER_NAME}" &> /dev/null; then
     log_info "Creating buildx builder: ${BUILDER_NAME}"
@@ -159,10 +154,10 @@ else
     docker buildx use "${BUILDER_NAME}"
 fi
 
-# Step 4: Build and validate the current-platform image locally
-log_info "Building local validation image for ${validation_platform}..."
+# Step 4: Build and validate the amd64 image locally
+log_info "Building local validation image for ${VALIDATION_PLATFORM}..."
 docker buildx build \
-    --platform "${validation_platform}" \
+    --platform "${VALIDATION_PLATFORM}" \
     --file "${DOCKERFILE_PATH}" \
     --tag "${VALIDATION_IMAGE_URI}" \
     --load \
@@ -171,10 +166,10 @@ docker buildx build \
 log_info "Validating nitro-cli image contents..."
 "${REPO_ROOT}/scripts/validate-nitro-cli-image.sh" "${VALIDATION_IMAGE_URI}"
 
-# Step 5: Build and push multi-arch image
-log_info "Building and pushing multi-arch image (amd64, arm64)..."
+# Step 5: Build and push the amd64 image
+log_info "Building and pushing ${PUBLISH_PLATFORM} image..."
 docker buildx build \
-    --platform linux/amd64,linux/arm64 \
+    --platform "${PUBLISH_PLATFORM}" \
     --file "${DOCKERFILE_PATH}" \
     --tag "${FULL_IMAGE_URI}:${TAG}" \
     --push \

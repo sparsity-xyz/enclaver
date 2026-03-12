@@ -563,6 +563,38 @@ mod tests {
             contents.contains("scripts/validate-nitro-cli-image.sh"),
             "nitro-cli workflow should validate the nitro-cli image before publishing it"
         );
+        assert!(
+            contents.contains("platforms: linux/amd64"),
+            "nitro-cli workflow should publish only linux/amd64"
+        );
+        assert!(
+            !contents.contains("linux/amd64,linux/arm64"),
+            "nitro-cli workflow should not publish linux/arm64"
+        );
+    }
+
+    #[test]
+    fn nitro_cli_publish_script_is_amd64_only() {
+        let path = repo_root().join("scripts/build-and-publish-nitro-cli.sh");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            contents.contains("VALIDATION_PLATFORM=\"linux/amd64\""),
+            "nitro-cli publish script should validate only linux/amd64"
+        );
+        assert!(
+            contents.contains("PUBLISH_PLATFORM=\"linux/amd64\""),
+            "nitro-cli publish script should publish only linux/amd64"
+        );
+        assert!(
+            contents.contains("currently supported only on x86_64 hosts"),
+            "nitro-cli publish script should reject non-x86_64 hosts"
+        );
+        assert!(
+            !contents.contains("linux/amd64,linux/arm64"),
+            "nitro-cli publish script should not publish linux/arm64"
+        );
     }
 
     #[test]

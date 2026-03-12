@@ -178,7 +178,9 @@ Nitro CLI is published only when explicitly requested, through:
 
 That keeps the normal release path small while still allowing us to refresh the
 Nitro CLI image whenever we intentionally update the bootstrap kernel or its
-config.
+config. The current publish path is intentionally limited to `linux/amd64`;
+`arm64` publishing remains disabled until the bootstrap build is reliable in
+that environment.
 
 ## Files To Inspect
 
