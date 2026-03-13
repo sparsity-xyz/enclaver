@@ -394,18 +394,23 @@ impl EnclaveArtifactBuilder {
         name_override: Option<&str>,
         default: &str,
     ) -> Result<ImageRef> {
-        match name_override {
-            Some(image_name) => {
-                let mut img = self.image_manager.find_or_pull(image_name).await?;
-                img.name = Some(image_name.to_string());
-                Ok(img)
-            }
+        let (image_name, mut img) = match name_override {
+            Some(image_name) => (
+                image_name,
+                self.image_manager.find_or_pull(image_name).await?,
+            ),
             None => {
-                let mut img = self.image_manager.pull_image(default).await?;
-                img.name = Some(default.to_string());
-                Ok(img)
+                let img = if self.pull_tags {
+                    self.image_manager.pull_image(default).await?
+                } else {
+                    self.image_manager.find_or_pull(default).await?
+                };
+                (default, img)
             }
-        }
+        };
+
+        img.name = Some(image_name.to_string());
+        Ok(img)
     }
 
     async fn resolve_sources(&self, manifest: &Manifest) -> Result<ResolvedSources> {
@@ -607,6 +612,11 @@ mod tests {
             "smoke test should assert that enclaver used the docker-dir Nitro CLI path"
         );
         assert!(
+            contents.contains("ENCLAVER_SMOKE_MODE")
+                && contents.contains("Preparing local fixture images for smoke mode"),
+            "smoke test should support a fixture mode for rate-limit-resistant CI coverage"
+        );
+        assert!(
             contents.contains("/enclave/application.eif")
                 && contents.contains("/enclave/enclaver.yaml"),
             "smoke test should verify the release image contains the packaged EIF bundle"
@@ -671,6 +681,10 @@ mod tests {
         assert!(
             contents.contains("Smoke test enclaver build"),
             "CI workflow should include the end-to-end enclaver build smoke test job step"
+        );
+        assert!(
+            contents.contains("ENCLAVER_SMOKE_MODE: fixture"),
+            "CI workflow should run the smoke test in fixture mode to avoid registry rate limits"
         );
         assert!(
             contents.contains("./scripts/enclaver-build-smoke-test.sh"),
@@ -876,6 +890,10 @@ mod tests {
             image_build_doc.contains("scripts/enclaver-build-smoke-test.sh"),
             "image build docs should document the enclaver build smoke test helper"
         );
+        assert!(
+            image_build_doc.contains("ENCLAVER_SMOKE_MODE=fixture"),
+            "image build docs should document the fixture-based smoke test mode"
+        );
 
         let ci_doc = read("docs/ci.md");
         assert!(
@@ -887,7 +905,8 @@ mod tests {
             "CI docs should describe the x86_64-only release artifact packaging"
         );
         assert!(
-            ci_doc.contains("scripts/enclaver-build-smoke-test.sh"),
+            ci_doc.contains("ENCLAVER_SMOKE_MODE=fixture")
+                && ci_doc.contains("scripts/enclaver-build-smoke-test.sh"),
             "CI docs should describe the enclaver build smoke test helper"
         );
 

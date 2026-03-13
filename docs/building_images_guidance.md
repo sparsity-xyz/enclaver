@@ -152,6 +152,16 @@ cargo build --manifest-path enclaver/Cargo.toml --bin enclaver
 ENCLAVER_BIN=./enclaver/target/debug/enclaver ./scripts/enclaver-build-smoke-test.sh
 ```
 
+For a deterministic Linux-only smoke path that avoids public-registry pulls by
+prebuilding local fixture images, run:
+
+```bash
+cargo build --manifest-path enclaver/Cargo.toml --bin enclaver
+ENCLAVER_SMOKE_MODE=fixture \
+  ENCLAVER_BIN=./enclaver/target/debug/enclaver \
+  ./scripts/enclaver-build-smoke-test.sh
+```
+
 ## Troubleshooting
 
 - Missing `cross`: `cargo install cross`

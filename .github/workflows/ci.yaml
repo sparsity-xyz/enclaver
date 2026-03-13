@@ -197,4 +197,5 @@ jobs:
       - name: Smoke test enclaver build
         env:
           ENCLAVER_BIN: ${{ github.workspace }}/enclaver/target/debug/enclaver
+          ENCLAVER_SMOKE_MODE: fixture
         run: ./scripts/enclaver-build-smoke-test.sh

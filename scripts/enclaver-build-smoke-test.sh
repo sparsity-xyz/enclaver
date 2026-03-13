@@ -9,8 +9,13 @@ BUILD_STDOUT="${TMP_DIR}/build-summary.json"
 BUILD_STDERR="${TMP_DIR}/build.log"
 APP_IMAGE_TAG="enclaver-build-smoke-app:${RANDOM}-$$"
 RELEASE_IMAGE_TAG="enclaver-build-smoke-release:${RANDOM}-$$"
+ODYN_IMAGE_TAG="enclaver-build-smoke-odyn:${RANDOM}-$$"
+SLEEVE_IMAGE_TAG="enclaver-build-smoke-sleeve:${RANDOM}-$$"
+NITRO_CLI_FIXTURE_TAG="public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest"
 ENCLAVER_BIN="${ENCLAVER_BIN:-enclaver}"
+ENCLAVER_SMOKE_MODE="${ENCLAVER_SMOKE_MODE:-official}"
 PROBE_CONTAINER_ID=""
+FIXTURE_NITRO_CLI_CREATED=0
 
 on_exit() {
     status=$?
@@ -21,12 +26,158 @@ on_exit() {
         [[ -f "${BUILD_STDERR}" ]] && cat "${BUILD_STDERR}" >&2
     fi
 
-    docker image rm -f "${APP_IMAGE_TAG}" "${RELEASE_IMAGE_TAG}" >/dev/null 2>&1 || true
+    docker image rm -f \
+        "${APP_IMAGE_TAG}" \
+        "${RELEASE_IMAGE_TAG}" \
+        "${ODYN_IMAGE_TAG}" \
+        "${SLEEVE_IMAGE_TAG}" >/dev/null 2>&1 || true
+    if [[ "${FIXTURE_NITRO_CLI_CREATED}" == "1" ]]; then
+        docker image rm -f "${NITRO_CLI_FIXTURE_TAG}" >/dev/null 2>&1 || true
+    fi
     [[ -n "${PROBE_CONTAINER_ID}" ]] && docker rm -f "${PROBE_CONTAINER_ID}" >/dev/null 2>&1 || true
     rm -rf "${TMP_DIR}"
 }
 
 trap on_exit EXIT
+
+build_fixture_images() {
+    local odyn_dir="${TMP_DIR}/odyn-fixture"
+    local sleeve_dir="${TMP_DIR}/sleeve-fixture"
+    local nitro_dir="${TMP_DIR}/nitro-cli-fixture"
+    local nitro_rootfs_dir="${nitro_dir}/rootfs"
+    local busybox_path=""
+
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        echo "fixture smoke mode currently requires a Linux host" >&2
+        exit 1
+    fi
+
+    busybox_path="$(command -v busybox || true)"
+    if [[ -z "${busybox_path}" ]]; then
+        echo "fixture smoke mode requires a local busybox binary on Linux" >&2
+        exit 1
+    fi
+
+    if docker image inspect "${NITRO_CLI_FIXTURE_TAG}" >/dev/null 2>&1; then
+        echo "fixture smoke mode refuses to overwrite existing local image tag: ${NITRO_CLI_FIXTURE_TAG}" >&2
+        exit 1
+    fi
+
+    mkdir -p "${odyn_dir}" "${sleeve_dir}" "${nitro_rootfs_dir}/bin" "${nitro_rootfs_dir}/usr/bin"
+
+    cat > "${odyn_dir}/odyn" <<'EOF'
+#!/bin/sh
+echo fixture-odyn
+EOF
+    chmod +x "${odyn_dir}/odyn"
+
+    cat > "${odyn_dir}/Dockerfile" <<'EOF'
+FROM scratch
+COPY odyn /usr/local/bin/odyn
+CMD ["/usr/local/bin/odyn"]
+EOF
+
+    cat > "${sleeve_dir}/nitro-cli" <<'EOF'
+fixture sleeve nitro-cli placeholder
+EOF
+    chmod +x "${sleeve_dir}/nitro-cli"
+
+    cat > "${sleeve_dir}/Dockerfile" <<'EOF'
+FROM scratch
+COPY nitro-cli /bin/nitro-cli
+CMD ["/bin/nitro-cli"]
+EOF
+
+    cp "${busybox_path}" "${nitro_rootfs_dir}/bin/busybox"
+
+    cat > "${nitro_rootfs_dir}/usr/bin/nitro-cli" <<'EOF'
+#!/bin/sh
+set -eu
+
+[ "${1:-}" = "build-enclave" ] || {
+    echo "unsupported fixture nitro-cli command: ${1:-}" >&2
+    exit 1
+}
+
+shift
+
+docker_uri=""
+docker_dir=""
+output_file=""
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --docker-uri)
+            docker_uri="${2:-}"
+            shift 2
+            ;;
+        --docker-dir)
+            docker_dir="${2:-}"
+            shift 2
+            ;;
+        --output-file)
+            output_file="${2:-}"
+            shift 2
+            ;;
+        --signing-certificate|--private-key)
+            shift 2
+            ;;
+        *)
+            echo "unexpected fixture nitro-cli arg: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+[ -n "${docker_uri}" ] || { echo "missing --docker-uri" >&2; exit 1; }
+[ -n "${docker_dir}" ] || { echo "missing --docker-dir" >&2; exit 1; }
+[ -n "${output_file}" ] || { echo "missing --output-file" >&2; exit 1; }
+[ -f "${docker_dir}/Dockerfile" ] || { echo "missing Dockerfile under ${docker_dir}" >&2; exit 1; }
+
+read -r first_line < "${docker_dir}/Dockerfile"
+case "${first_line}" in
+    FROM\ enclaver-intermediate-*:latest)
+        ;;
+    *)
+        echo "unexpected docker context line: ${first_line}" >&2
+        exit 1
+        ;;
+esac
+
+printf 'fixture EIF for %s\n' "${docker_uri}" > "${output_file}"
+printf '{"Measurements":{"PCR0":"fixture-pcr0","PCR1":"fixture-pcr1","PCR2":"fixture-pcr2"}}'
+EOF
+    chmod +x "${nitro_rootfs_dir}/usr/bin/nitro-cli"
+
+    cat > "${nitro_dir}/Dockerfile" <<'EOF'
+FROM scratch
+COPY rootfs/ /
+WORKDIR /build
+ENTRYPOINT ["/bin/busybox", "sh", "/usr/bin/nitro-cli"]
+EOF
+
+    docker build -t "${ODYN_IMAGE_TAG}" "${odyn_dir}" >/dev/null
+    docker build -t "${SLEEVE_IMAGE_TAG}" "${sleeve_dir}" >/dev/null
+    docker build -t "${NITRO_CLI_FIXTURE_TAG}" "${nitro_dir}" >/dev/null
+    FIXTURE_NITRO_CLI_CREATED=1
+}
+
+write_manifest() {
+    cat > "${MANIFEST_PATH}" <<EOF
+version: "v1"
+name: "enclaver-build-smoke"
+target: "${RELEASE_IMAGE_TAG}"
+sources:
+  app: "${APP_IMAGE_TAG}"
+EOF
+
+    if [[ "${ENCLAVER_SMOKE_MODE}" == "fixture" ]]; then
+        cat >> "${MANIFEST_PATH}" <<EOF
+  odyn: "${ODYN_IMAGE_TAG}"
+  sleeve: "${SLEEVE_IMAGE_TAG}"
+EOF
+    fi
+}
 
 if [[ -x "${ENCLAVER_BIN}" ]]; then
     true
@@ -34,6 +185,15 @@ elif ! command -v "${ENCLAVER_BIN}" >/dev/null 2>&1; then
     echo "enclaver binary not found: ${ENCLAVER_BIN}" >&2
     exit 1
 fi
+
+case "${ENCLAVER_SMOKE_MODE}" in
+    official|fixture)
+        ;;
+    *)
+        echo "unsupported ENCLAVER_SMOKE_MODE: ${ENCLAVER_SMOKE_MODE}" >&2
+        exit 1
+        ;;
+esac
 
 docker info >/dev/null
 mkdir -p "${APP_DIR}"
@@ -43,13 +203,12 @@ FROM scratch
 CMD ["/smoke-test-placeholder"]
 EOF
 
-cat > "${MANIFEST_PATH}" <<EOF
-version: "v1"
-name: "enclaver-build-smoke"
-target: "${RELEASE_IMAGE_TAG}"
-sources:
-  app: "${APP_IMAGE_TAG}"
-EOF
+if [[ "${ENCLAVER_SMOKE_MODE}" == "fixture" ]]; then
+    echo "Preparing local fixture images for smoke mode"
+    build_fixture_images
+fi
+
+write_manifest
 
 echo "[1/5] building app image ${APP_IMAGE_TAG}"
 docker build -t "${APP_IMAGE_TAG}" "${APP_DIR}" >/dev/null
