@@ -6,6 +6,9 @@ Scope:
 - Included: `enclaver build`, `enclaver run`, `enclaver-run` (sleeve), `odyn`, `ingress`, API/Aux API/Helios listeners.
 - Excluded: external reverse proxies and platform-specific ingress layers.
 
+For a deeper explanation of the CID-derived host-side VSOCK model, see
+`docs/vsock_runtime.md`.
+
 Multi-instance support:
 - Multiple `enclaver run` processes can run on the same EC2 instance.
 - `enclaver-run` picks a managed enclave CID for each instance and derives host-side VSOCK listeners for egress, clock sync, and hostfs from that CID.
