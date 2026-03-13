@@ -41,8 +41,10 @@ For inbound traffic to work, all required layers must align.
 
 ### `enclaver run` (CLI)
 
-- `-f/--file` is used only to resolve `manifest.target` when image name is not provided.
+- `-f/--file` is used to resolve `manifest.target` when image name is not provided.
+- `-f/--file` (or the default local `enclaver.yaml`) is also how runtime `--mount` bindings are resolved against `storage.mounts[]`.
 - `--publish/-p` is the only source of Docker host port publishing.
+- `--mount` is rejected in image-name-only mode because there is no manifest to resolve.
 - It does not auto-publish ports from `manifest.ingress`.
 
 ### `enclaver-run` (sleeve runtime in container)
@@ -51,7 +53,7 @@ For inbound traffic to work, all required layers must align.
 - Chooses a managed enclave CID and launches Nitro CLI with that explicit CID.
 - Starts host-side ingress proxies for each `manifest.ingress[].listen_port`.
 - Each proxy listens on container `0.0.0.0:<listen_port>` and forwards to enclave vsock `<listen_port>`.
-- Starts host-side runtime VSOCK listeners for egress, clock sync, and hostfs on ports derived from the managed CID.
+- Starts host-side runtime VSOCK listeners for egress (when enabled), clock sync, and hostfs on ports derived from the managed CID.
 
 ### `odyn` (inside enclave)
 
@@ -134,6 +136,12 @@ colliding on host-side runtime VSOCK listeners.
 
 4. Protocol mismatch on ingress port
    - Example: sending REST-style requests to a JSON-RPC endpoint.
+
+5. Used `--mount` without loading a manifest
+   - Runtime mount resolution needs `storage.mounts[]` from `-f` or the default local `enclaver.yaml`.
+
+6. Changed `storage.mounts[]` order without realizing it affects hostfs VSOCK ports
+   - Host and enclave both derive mount ports from manifest order.
 
 ## Validation Checklist
 

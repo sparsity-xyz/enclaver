@@ -58,7 +58,7 @@ aux_api:
 The manifest includes:
 - `ingress` - Allows external HTTP traffic on port 8000
 - `egress` - Allows outbound requests to news.ycombinator.com
-- `api` - Enables the internal API service on port 9000 (provides attestation and key management)
+- `api` - Enables the internal API service on port 9000 (provides attestation, signing, encryption, and randomness)
 - `aux_api` - Enables the auxiliary API on port 9001 (provides controlled external access to select API endpoints)
 
 Then build enclaver image with command:
@@ -154,7 +154,8 @@ curl http://localhost:9001/v1/eth/address
 Example response:
 ```json
 {
-  "address": "0x1234567890abcdef1234567890abcdef12345678"
+  "address": "0x1234567890abcdef1234567890abcdef12345678",
+  "public_key": "0x04..."
 }
 ```
 
@@ -191,11 +192,14 @@ curl -X POST http://localhost:9001/v1/attestation \
 ```
 
 Example response:
-```json
-{
-  "attestation_document": "base64-encoded-attestation-document",
-  "public_key": "base64-encoded-public-key"
-}
+The response body is raw CBOR bytes with `Content-Type: application/cbor`, not JSON.
+For example:
+
+```bash
+curl -sS -X POST http://localhost:9001/v1/attestation \
+  -H "Content-Type: application/json" \
+  -d '{"nonce": "your-base64-encoded-nonce-here"}' \
+  -o attestation.cbor
 ```
 
 **Security Note:** The aux API automatically sanitizes incoming attestation requests by removing `public_key` before forwarding them to the internal API. `nonce` and `user_data` are preserved, so external callers cannot override the enclave's default attestation key while still being able to provide freshness and caller-specific metadata.

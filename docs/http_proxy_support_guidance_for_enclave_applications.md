@@ -1,195 +1,68 @@
 # HTTP(S) Proxy Support Guidance for Enclave Applications
 
-## Scope & Assumptions
+## Scope and assumptions
 
-- Applications run **inside an enclave** (e.g., SGX / TDX / Nitro Enclaves)
-- No direct outbound network access is available
-- All external HTTP/HTTPS traffic **must go through a proxy**
-- In Enclaver, Odyn sets both lowercase and uppercase proxy environment variables:
+- applications run inside an enclave
+- Enclaver's built-in outbound path is an HTTP(S) proxy, not arbitrary raw TCP egress
+- when `egress.allow` is non-empty, Odyn sets:
   - `http_proxy`
   - `https_proxy`
-  - `no_proxy`
   - `HTTP_PROXY`
   - `HTTPS_PROXY`
+  - `no_proxy`
   - `NO_PROXY`
+- `no_proxy` and `NO_PROXY` are currently `localhost,127.0.0.1`
 
-Any HTTP client that **ignores proxy environment variables is unusable by default** in this environment.
+This document intentionally focuses on Enclaver's runtime contract, not on an
+exhaustive survey of every third-party HTTP library.
 
----
+## Runtime contract
 
-## Executive Summary
+For outbound HTTP/HTTPS to work inside the enclave:
 
-**Do NOT assume proxy support.**
+- your client stack must support HTTP proxying
+- it must either honor the proxy environment variables above or be configured explicitly to use `http://127.0.0.1:<egress.proxy_port>`
+- enclave-local traffic such as `127.0.0.1:<api.listen_port>` must stay direct instead of being sent through the proxy
+- the destination host must still pass the manifest's `egress.allow` / `egress.deny` policy
 
-Many modern, standardized HTTP client APIs intentionally **ignore `HTTP_PROXY` / `HTTPS_PROXY`** for reasons of security and predictability.
+If a client ignores proxy configuration, it may work outside the enclave but
+fail once the same code runs inside the enclave.
 
-> If proxy support is not explicitly documented or configured, assume it is **NOT supported**.
+## What to verify in your application
 
----
+- whether the library supports HTTP proxying for both HTTP and HTTPS requests
+- whether env-based proxy configuration is enough, or whether your code must attach an explicit transport, connector, or agent
+- whether custom transport code preserves proxy configuration instead of silently dropping it
+- whether localhost traffic bypasses the proxy as intended
+- whether startup checks fail fast when the proxy path or egress policy blocks a required dependency
 
-## Proxy Support Matrix (Default Behavior)
+## Repo-backed example
 
-Legend:
-- ✅ Supported by default
-- ❌ Not supported
-- ⚠️ Supported only with explicit configuration
+The repo's `examples/hn-fetcher/app.js` reads `HTTPS_PROXY` / `https_proxy`
+and, when present, constructs an explicit proxy-aware agent before making
+outbound requests. Use that style when your chosen client stack does not
+automatically pick up proxy environment variables.
 
----
+## Suggested startup self-tests
 
-## Node.js
+- request one allowed external URL through the same application HTTP client used in production
+- request one enclave-local URL such as `http://127.0.0.1:<api_port>/v1/eth/address` and confirm it is still reachable locally
+- fail startup early if either path behaves unexpectedly
 
-| Client / API | Proxy Env Support | Notes |
-|-------------|------------------|------|
-| `fetch` (Node 18+, undici) | ❌ | Does not read proxy env vars |
-| `http.request` / `https.request` | ❌ | Low-level API, no env support |
-| `axios` | ⚠️ | Requires `proxy-from-env` |
-| `node-fetch` | ❌ | Deprecated |
-| `undici` + `ProxyAgent` | ⚠️ | Must configure explicitly |
+## Common failure modes
 
-**Guidance**
-- ❌ Do **not** use `fetch` inside enclaves
-- ✅ Use `undici` with `ProxyAgent`, or `axios + proxy-from-env`
+- the manifest does not allow the destination host
+- the client ignores proxy configuration
+- custom transport or agent code accidentally removes proxy behavior
+- localhost traffic is incorrectly sent through the proxy
+- the application assumes arbitrary outbound TCP, but Enclaver only provides documented HTTP/HTTPS proxy egress
 
----
+## Final guidance
 
-## Go
+Use an outbound HTTP client stack only when you have verified one of these two
+behaviors:
 
-| Client / API | Proxy Env Support | Notes |
-|-------------|------------------|------|
-| `http.DefaultClient` | ✅ | Uses `ProxyFromEnvironment` |
-| Custom `http.Client` with custom `Transport` | ❌ | Proxy support lost unless re-added |
+- it correctly honors the proxy environment variables that Odyn sets
+- your application configures the proxy explicitly
 
-**Common Pitfall**
-```go
-&http.Transport{} // breaks proxy support
-```
-
-**Correct Configuration**
-```go
-Transport: &http.Transport{
-    Proxy: http.ProxyFromEnvironment,
-}
-```
-
-**Guidance**
-- ✅ Prefer `http.DefaultClient`
-- ⚠️ Explicitly set `ProxyFromEnvironment` when customizing transports
-
----
-
-## Python
-
-| Client / API | Proxy Env Support | Notes |
-|-------------|------------------|------|
-| `requests` | ✅ | Fully supports proxy env vars |
-| `urllib.request` | ⚠️ | Requires `ProxyHandler` |
-| `http.client` | ❌ | No env support |
-
-**Guidance**
-- ✅ Use `requests`
-- ❌ Avoid `http.client`
-
----
-
-## Java
-
-| Client / API | Proxy Env Support | Notes |
-|-------------|------------------|------|
-| `HttpURLConnection` | ⚠️ | Requires JVM system properties |
-| `HttpClient` (Java 11+) | ❌ | Does not read proxy env vars |
-
-**Guidance**
-- ❌ Do not rely on env vars with Java 11+ `HttpClient`
-- ⚠️ Always configure proxy explicitly via `ProxySelector` or JVM flags
-
----
-
-## Rust
-
-| Client / API | Proxy Env Support | Notes |
-|-------------|------------------|------|
-| `reqwest` | ⚠️ | Requires proxy-related features |
-| `hyper` | ❌ | No proxy env support |
-
-**Guidance**
-- ⚠️ Enable proxy features explicitly in `reqwest`
-- ❌ Avoid `hyper` for enclave networking
-
----
-
-## .NET
-
-| Client / API | Proxy Env Support | Notes |
-|-------------|------------------|------|
-| `HttpClient` | ⚠️ | Depends on handler & platform |
-
-**Guidance**
-- Explicit proxy configuration strongly recommended
-- Do not assume environment variables are honored
-
----
-
-## C / C++
-
-| Client / API | Proxy Env Support | Notes |
-|-------------|------------------|------|
-| `libcurl` | ✅ | Industry standard |
-| Raw sockets | ❌ | No support |
-
-**Guidance**
-- ✅ Prefer `libcurl` whenever possible
-
----
-
-## PHP
-
-| Client / API | Proxy Env Support | Notes |
-|-------------|------------------|------|
-| `file_get_contents` | ❌ | No env support |
-| `curl` extension | ✅ | Full support |
-
----
-
-## Recommended Libraries for Enclave Environments
-
-### Strongly Recommended
-- **libcurl (C/C++)**
-- **Python `requests`**
-- **Go `net/http` (default client)**
-- **Node.js `undici` + `ProxyAgent`**
-
-### Explicitly Discouraged
-- Node.js `fetch`
-- Java 11+ `HttpClient` (without manual proxy configuration)
-- Rust `hyper`
-- Python `http.client`
-
----
-
-## Enclave-Specific Best Practices
-
-1. **Fail fast**: verify proxy connectivity at startup
-2. **Make proxy usage explicit**: avoid hidden defaults
-3. **Document proxy requirements** as mandatory runtime dependencies
-4. **Log effective proxy configuration** (redact credentials)
-5. **Avoid implicit behavior** that may change across runtime versions
-
----
-
-## Recommended Startup Self-Test
-
-```bash
-curl https://ifconfig.me
-```
-
-Or an internal endpoint that is reachable only through the proxy and allowed by your egress policy.
-
----
-
-## Final Guidance Statement
-
-> Any HTTP client used inside an enclave **MUST** either explicitly support
-> `HTTP_PROXY` / `HTTPS_PROXY`, or be configured programmatically to route all
-> traffic through a proxy.
->
-> Clients that silently ignore proxy environment variables **MUST NOT be used**.
+Anything else is outside Enclaver's documented outbound contract.

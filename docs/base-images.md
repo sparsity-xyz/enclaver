@@ -81,13 +81,15 @@ Build time:
 3. amend the app image with:
    - `/etc/enclaver/enclaver.yaml`
    - `/sbin/odyn`
-4. run `nitro-cli build-enclave` inside the Nitro CLI image to produce `application.eif`
-5. append `application.eif` and `enclaver.yaml` to the Sleeve image
+4. tag the amended image locally and write a tiny temporary Docker context whose `Dockerfile` is `FROM <local-tag>`
+5. run `nitro-cli build-enclave --docker-dir <that-context>` inside the Nitro CLI image to produce `application.eif`
+6. append `application.eif` and `enclaver.yaml` to the Sleeve image
 
 Runtime:
 
 - the final release image is a Sleeve image plus `/enclave/application.eif` and `/enclave/enclaver.yaml`
-- `enclaver-run` starts inside the container and uses `nitro-cli` to launch the enclave
+- `enclaver-run` reads `/enclave/enclaver.yaml` for host-side runtime behavior and uses `nitro-cli` to launch the enclave
+- inside the EIF, `odyn` reads the matching manifest copy at `/etc/enclaver/enclaver.yaml`
 
 ## Local inspection commands
 

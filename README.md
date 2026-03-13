@@ -34,6 +34,8 @@ Run this command to install the latest version of the `enclaver` CLI tool:
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sparsity-xyz/enclaver/refs/heads/sparsity/install.sh)"
 ```
 
+Current automated release artifacts and the installer script target Linux `x86_64` only.
+
 ## Quick Start
 
 See [examples/hn-fetcher/readme.md](examples/hn-fetcher/readme.md) for a quick start example of building and running an enclave application with Enclaver.
@@ -45,9 +47,9 @@ For runtime configuration and feature-specific guides, use the links in the docu
 Applications running **inside the enclave** have no direct outbound network access. Any external HTTP/HTTPS traffic must go through Enclaver/Odyn's egress proxy.
 
 - Your application (and the HTTP client library it uses) **must** support proxy routing via `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` (or be explicitly configured to use a proxy).
-- Some popular client APIs intentionally **ignore** these environment variables by default (e.g. Node.js `fetch` / undici without a proxy agent). In that case the app may work outside the enclave but **fail inside**.
+- If the client library ignores these environment variables, the app may work outside the enclave but **fail inside** unless you configure the proxy explicitly. The repo's `examples/hn-fetcher/app.js` shows one explicit-proxy pattern.
 
-See [docs/http_proxy_support_guidance_for_enclave_applications.md](docs/http_proxy_support_guidance_for_enclave_applications.md) for language/library-specific guidance and common pitfalls.
+See [docs/http_proxy_support_guidance_for_enclave_applications.md](docs/http_proxy_support_guidance_for_enclave_applications.md) for the runtime contract, verification checklist, and common pitfalls.
 
 ## Documentation
 
@@ -72,7 +74,7 @@ The ASCII view below keeps the original file/layout-oriented perspective: what t
 │  entrypoint: /usr/local/bin/enclaver-run                                     │
 │  includes:                                                                   │
 │    - /bin/nitro-cli                                                          │
-│    - /enclave/enclaver.yaml   (unified config)                               │
+│    - /enclave/enclaver.yaml   (host-side runtime manifest copy)              │
 │    - /enclave/application.eif                                                │
 │                                                                              │
 │  Image layers (top -> bottom):                                               │
@@ -82,13 +84,13 @@ The ASCII view below keeps the original file/layout-oriented perspective: what t
 │                                                                              │
 │  Runtime control flow:                                                       │
 │    enclaver-run --> nitro-cli run-enclave --eif /enclave/application.eif     │
-│                  \-> passes config from /enclave/enclaver.yaml to enclave    │
+│                  \-> reads /enclave/enclaver.yaml for host-side runtime      │
 └──────────────────────────────────────────────────────────────────────────────┘
 
                      | launches enclave with EIF
                      v
 ┌─────────────────────────── Enclave (application.eif) ────────────────────────┐
-│ /etc/enclaver/enclaver.yaml (config, also inside EIF)                        │
+│ /etc/enclaver/enclaver.yaml (matching manifest copy embedded for odyn)       │
 │                                                                              │
 │ /sbin/odyn (supervisor)                                                      │
 │   Runtime services                                                           │

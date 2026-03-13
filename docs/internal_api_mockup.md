@@ -10,13 +10,12 @@ What exists here is:
 
 ## External mock endpoints
 
-Some example apps use an external endpoint such as:
+Some applications choose to talk to a separately hosted development endpoint
+when they are not running inside an enclave.
 
-```text
-http://odyn.sparsity.cloud:18000
-```
-
-That endpoint is not part of this repository and is not versioned together with Enclaver. Treat it as an external development convenience, not as a guaranteed mirror of the current `odyn` implementation.
+That endpoint is not part of this repository and is not versioned together with
+Enclaver. Treat any such URL as an external development convenience, not as a
+guaranteed mirror of the current `odyn` implementation.
 
 ## Recommended usage pattern
 
@@ -26,12 +25,14 @@ If you want your app to switch between enclave-local and external development en
 import os
 
 IN_ENCLAVE = os.getenv("IN_ENCLAVE", "false").lower() == "true"
-ODYN_BASE_URL = "http://127.0.0.1:18000" if IN_ENCLAVE else "http://odyn.sparsity.cloud:18000"
+ODYN_DEV_URL = os.getenv("ODYN_DEV_URL", "http://localhost:18000")
+ODYN_BASE_URL = "http://127.0.0.1:18000" if IN_ENCLAVE else ODYN_DEV_URL
 ```
 
 Notes:
 
 - `IN_ENCLAVE` is not set automatically by Enclaver
+- `ODYN_DEV_URL` is an application choice, not an Enclaver-managed endpoint
 - choose and manage that convention in your own application image or deployment environment
 - if your manifest uses a different `api.listen_port`, update the enclave-local URL accordingly
 

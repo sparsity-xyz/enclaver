@@ -14,7 +14,7 @@ The codebase has three execution domains:
 2. host/container runtime
    - run the Sleeve image
    - launch the enclave with `nitro-cli`
-   - provide host-side ingress, egress, log, status, and clock-sync plumbing
+   - provide host-side ingress, egress, hostfs, log, status, and clock-sync plumbing
 
 3. enclave runtime
    - run `odyn` as PID 1
@@ -36,6 +36,7 @@ The codebase has three execution domains:
 
 - `enclaver/src/nitro_cli_container.rs`
   - runs `nitro-cli build-enclave` inside a container
+  - consumes the tiny temporary Docker context that points at the locally tagged amended image
 
 - `enclaver/src/manifest.rs`
   - manifest schema
@@ -61,7 +62,7 @@ The codebase has three execution domains:
 
 - `enclaver/src/run.rs`
   - runtime orchestrator inside the Sleeve container
-  - starts host-side egress proxy
+  - starts host-side egress proxy when `egress.allow` enables proxying
   - starts host-side hostfs proxies
   - starts host-side clock-sync server
   - launches the enclave with `nitro-cli`
@@ -176,7 +177,7 @@ The codebase has three execution domains:
 ### Host side (`enclaver-run`)
 
 1. load `/enclave/enclaver.yaml`
-2. start host-side egress proxy when `egress` is present
+2. start host-side egress proxy when `egress.allow` is non-empty
 3. start host-side hostfs proxies for bound `storage.mounts[]`
 4. start host-side clock-sync server unless `clock_sync.enabled=false`
 5. call `nitro-cli run-enclave`
@@ -225,6 +226,10 @@ Sleeve base
 |- /enclave/enclaver.yaml
 `- /enclave/application.eif
 ```
+
+`enclaver-run` reads the packaged `/enclave/enclaver.yaml` copy. Inside the EIF,
+`odyn` reads the matching `/etc/enclaver/enclaver.yaml` copy that was embedded
+before `nitro-cli build-enclave`.
 
 Amended app image before EIF conversion:
 

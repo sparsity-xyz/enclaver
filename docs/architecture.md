@@ -4,14 +4,15 @@ This is the high-level architecture view. For code-level module mapping, see `do
 
 ## Build-time flow
 
-`enclaver build` does four things:
+`enclaver build` currently does five things:
 
 1. loads `enclaver.yaml`
 2. amends the source app image by adding:
    - `/sbin/odyn`
    - `/etc/enclaver/enclaver.yaml`
-3. runs `nitro-cli build-enclave` in a Nitro CLI container to produce `application.eif`
-4. appends `application.eif` and `enclaver.yaml` to the Sleeve base image
+3. tags that amended image locally as a temporary `enclaver-intermediate-<uuid>:latest`
+4. writes a tiny temporary Docker context whose `Dockerfile` is `FROM <that-local-tag>`, then runs `nitro-cli build-enclave --docker-dir ...` in a Nitro CLI container to produce `application.eif`
+5. appends `application.eif` and `enclaver.yaml` to the Sleeve base image
 
 Result:
 
@@ -23,13 +24,18 @@ release image
 `- /enclave/enclaver.yaml
 ```
 
+That means the manifest is copied twice during build:
+
+- `/enclave/enclaver.yaml` for `enclaver-run` on the host/container side
+- `/etc/enclaver/enclaver.yaml` inside the EIF for `odyn`
+
 ## Runtime flow
 
 Host/container side:
 
 1. `enclaver run` starts the Sleeve image as a privileged Docker container and mounts `/dev/nitro_enclaves`
-2. `enclaver-run` loads `/enclave/enclaver.yaml`
-3. it starts the host-side egress proxy if `egress` is present
+2. `enclaver-run` loads `/enclave/enclaver.yaml` for host-side runtime configuration
+3. it starts the host-side egress proxy only when `egress.allow` effectively enables proxying
 4. it starts host-side hostfs proxies for each bound `storage.mounts[]` entry
 5. it starts the host-side clock-sync time server when clock sync is effectively enabled
 6. it launches the enclave with `nitro-cli run-enclave`

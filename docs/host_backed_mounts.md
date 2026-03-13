@@ -116,6 +116,7 @@ usage grows as data is written.
 - when the image fills, writes fail with `ENOSPC`
 - optional mounts are skipped if the matching runtime bind is absent
 - required mounts fail startup if the runtime bind or host proxy is unavailable
+- the current runtime VSOCK layout supports up to 112 hostfs mounts per enclave
 - host-side prerequisites are `mkfs.ext4`, `mount`, and `umount`
 - the EIF kernel must include FUSE support for enclave-side mounting
 

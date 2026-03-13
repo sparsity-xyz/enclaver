@@ -193,6 +193,7 @@ That order defines the hostfs offset inside the per-CID VSOCK block:
 - mount index `0` -> `block base + 16`
 - mount index `1` -> `block base + 17`
 - and so on
+- the current layout reserves 112 hostfs mount slots per enclave (`128 - 16`)
 
 Both sides must walk the mounts in the same order:
 

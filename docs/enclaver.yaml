@@ -5,7 +5,8 @@
 #
 # Contract
 # - Inputs: Docker images, optional signing keys.
-# - Outputs: A release image that contains an EIF and the manifest; at runtime `odyn` reads this.
+# - Outputs: A release image that contains an EIF plus a packaged manifest for `enclaver-run`;
+#   the EIF also contains a matching `/etc/enclaver/enclaver.yaml` copy that `odyn` reads.
 # - Errors: Unknown fields are rejected; missing required fields or malformed values fail at build/run.
 #
 # Notes
@@ -23,9 +24,9 @@
 # ============================================================================
 
 # Required top-level fields
-version: "v1"                 # [BUILD] Schema version (string). Only "v1" is supported.
+version: "v1"                 # [BUILD] Schema version string. Current docs/examples use "v1".
 name: "your-service"          # [BUILD] Friendly name for your enclave/application (string).
-target: "repo/name:tag"       # [BUILD] Release image tag to produce on build (string).
+target: "repo/name:tag"       # [BUILD] Release image tag to produce on build; also the image looked up by `enclaver run -f`.
 
 # Source images used during build
 sources:
@@ -50,8 +51,9 @@ defaults:
   memory_mb: 4096            # [SLEEVE] Optional. Enclave memory in MiB (i32)
 
 # Ingress: host->enclave TCP listeners exposed by odyn inside the enclave
-# Each entry binds inside the enclave on the given listen_port and is proxied via host localhost.
-# At run time, the host-side runner publishes the same port to the host network as needed.
+# Each entry binds inside the enclave on the given listen_port and is proxied via a TCP listener
+# in the Sleeve container. At run time, `enclaver run -p` publishes that container port to the
+# host network as needed.
 #
 # Recommendation: Use the built-in E2E encryption endpoints (/v1/encryption/encrypt,
 # /v1/encryption/decrypt) for tee-pubkey-based client-to-enclave encrypted transport.
@@ -59,7 +61,7 @@ ingress:
   - listen_port: 18001       # aux API (for attestation)
   - listen_port: 8080        # [ODYN + SLEEVE] Required. TCP port (u16) inside the enclave.
                              # ODYN: binds EnclaveProxy on this port inside enclave.
-                             # SLEEVE: binds HostProxy on host to forward to enclave vsock.
+                             # SLEEVE: binds HostProxy on the container TCP port to forward to enclave vsock.
 
   # Example (NOT for production): expose internal API, and Helios RPC externally.
   # WARNING: Do not expose these endpoints in production environments.
@@ -173,6 +175,7 @@ storage:
   # - The mounted filesystem is bind-mounted into the Sleeve container.
   # - `enclaver-run` serves it over a hostfs file proxy on vsock.
   # - `odyn` mounts it inside the enclave before the application starts.
+  # - Mount order defines the derived hostfs vsock port assignment.
   mounts:
     - name: "appdata"        # [BUILD] Stable runtime mount identifier.
       mount_path: "/mnt/appdata" # [ODYN] Path mounted inside the enclave before app launch. Must live under /mnt/.
@@ -180,9 +183,9 @@ storage:
       size_mb: 10240         # [BUILD] Loopback image size in MiB. Runtime always creates the host state dir if missing and mounts rw.
 
 # Optional: automatic clock synchronization between host and enclave
-# Nitro Enclaves do not automatically synchronize their system clock with the host.
-# Over time, the enclave clock drifts (~7 seconds per week). This can cause failures
-# in JWT validation, TLS certificate checks, and cryptographic protocols.
+# Without host-assisted sync, long-running enclaves can drift relative to the parent
+# instance's wall clock. That can break JWT validation, TLS certificate checks,
+# and other time-sensitive application behavior.
 # Enclaver enables clock sync by default, even if this block is omitted.
 # Use this block only to disable clock sync or adjust the sync interval.
 # Omit the block entirely to keep defaults, or write `clock_sync: {}` to keep
@@ -238,6 +241,10 @@ clock_sync:
 # | storage.s3.encryption.aad_mode | ODYN | AAD binding mode for ciphertext metadata     |
 # | storage.s3.encryption.key_version | ODYN | Encryption key version label              |
 # | storage.s3.encryption.accept_plaintext | ODYN | Allow plaintext reads when present      |
+# | storage.mounts[].name | BUILD+CLI | Stable runtime mount identifier                    |
+# | storage.mounts[].mount_path | ODYN | Enclave mount path (must live under /mnt)         |
+# | storage.mounts[].required | BUILD+CLI | Fail runtime startup when the bind is missing   |
+# | storage.mounts[].size_mb | BUILD+CLI | Loopback image size in MiB                      |
 # | clock_sync.enabled     | ODYN+SLEEVE | Disable clock sync when set to false (default: enabled) |
 # | clock_sync.interval_secs | ODYN      | Override clock sync interval in seconds (default 300) |
 #
