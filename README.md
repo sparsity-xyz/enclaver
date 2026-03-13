@@ -77,6 +77,9 @@ The ASCII view below keeps the original file/layout-oriented perspective: what t
 │    - /enclave/enclaver.yaml   (host-side runtime manifest copy)              │
 │    - /enclave/application.eif                                                │
 │                                                                              │
+│  Runtime bind mounts (when `--mount` is used):                               │
+│    - /mnt/enclaver-hostfs-data/<name>  (host-backed loopback mount)          │
+│                                                                              │
 │  Image layers (top -> bottom):                                               │
 │    [L3] /enclave/application.eif                                             │
 │    [L2] /enclave/enclaver.yaml                                               │
@@ -97,6 +100,7 @@ The ASCII view below keeps the original file/layout-oriented perspective: what t
 │   - launcher:   start and monitor the application                            │
 │   - ingress:    inbound traffic --> app                                      │
 │   - egress:     app --> outbound traffic                                     │
+│   - hostfs:     mount `/mnt/...` dirs via hostfs proxy                       │
 │   - clock-sync: keep enclave wall clock aligned with host time               │
 │   - helios:     trustless Ethereum / OP Stack light client RPC               │
 │   - console:    collect app stdout/stderr --> container logs                 │
@@ -107,7 +111,7 @@ The ASCII view below keeps the original file/layout-oriented perspective: what t
 │   - storage:    `/v1/s3/*` persistent storage integration                    │
 │   - kms:        `/v1/kms/*` + `/v1/app-wallet/*` backed by Nova KMS          │
 │                                                                              │
-│ [User Application] (started and supervised by odyn)                          │
+│ [User Application] (started and supervised by odyn; sees `/mnt/...`)         │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -115,6 +119,7 @@ Data paths overview:
 
 - External clients -> container networking -> `odyn.ingress` -> app
 - App -> `odyn.egress` -> container networking -> external services
+- App file I/O under `/mnt/...` -> `odyn.hostfs` -> hostfs proxy -> host-backed loopback image
 - `odyn.clock-sync` <-> host vsock time server <-> host wall clock
 - `odyn` Internal API (`/v1/kms/*`) <-> Nova KMS cluster via registry discovery
 - App stdout/stderr -> `odyn.console` -> Docker container logs
