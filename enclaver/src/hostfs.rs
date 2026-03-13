@@ -10,7 +10,6 @@ use nix::fcntl::{FlockArg, flock};
 use uuid::Uuid;
 
 use crate::manifest::Manifest;
-
 // Each runtime --mount binding points at a host state directory. We keep the
 // loopback image and lock state under a hidden metadata directory there so the
 // same host path can be reused across runs to preserve contents.
@@ -166,6 +165,20 @@ pub fn resolve_loopback_mounts(
 pub fn prepare_loopback_mounts(
     requests: &[LoopbackMountRequest],
 ) -> Result<Vec<PreparedLoopbackMount>> {
+    let mut seen_host_state_dirs = HashMap::new();
+    for request in requests {
+        if let Some(existing) =
+            seen_host_state_dirs.insert(request.host_state_dir.clone(), &request.name)
+        {
+            bail!(
+                "hostfs mounts '{}' and '{}' cannot share the same host state dir {}",
+                existing,
+                request.name,
+                request.host_state_dir.display()
+            );
+        }
+    }
+
     let mut mounts = Vec::with_capacity(requests.len());
     for request in requests {
         match prepare_loopback_mount(request.clone()) {
@@ -352,7 +365,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::HOST_RUNTIME_HOSTFS_CAPACITY;
     use crate::manifest::{HostFsMountConfig, Manifest, Sources, Storage};
+    use crate::runtime_vsock::RuntimeHostVsockPorts;
 
     #[test]
     fn parse_runtime_mount_binding_accepts_name_and_path() {
@@ -364,6 +379,40 @@ mod tests {
     #[test]
     fn parse_runtime_mount_binding_rejects_missing_separator() {
         assert!(parse_runtime_mount_binding("appdata").is_err());
+    }
+
+    #[test]
+    fn runtime_hostfs_ports_for_distinct_cids_do_not_overlap() {
+        let first = RuntimeHostVsockPorts::for_cid(16)
+            .unwrap()
+            .hostfs_mount_port(0)
+            .unwrap();
+        let second = RuntimeHostVsockPorts::for_cid(17)
+            .unwrap()
+            .hostfs_mount_port(0)
+            .unwrap();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn runtime_hostfs_ports_reject_indices_beyond_reserved_range() {
+        let err = RuntimeHostVsockPorts::for_cid(16)
+            .unwrap()
+            .hostfs_mount_port(HOST_RUNTIME_HOSTFS_CAPACITY as usize)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("per-enclave hostfs capacity"));
+    }
+
+    #[test]
+    fn runtime_hostfs_ports_reject_indices_that_do_not_fit_u32() {
+        let err = RuntimeHostVsockPorts::for_cid(16)
+            .unwrap()
+            .hostfs_mount_port((u32::MAX as usize).saturating_add(1))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not fit into u32"));
     }
 
     #[test]
@@ -383,7 +432,6 @@ mod tests {
             defaults: None,
             api: None,
             aux_api: None,
-            vsock_ports: None,
             storage: Some(Storage {
                 s3: None,
                 mounts: Some(vec![HostFsMountConfig {
@@ -421,6 +469,54 @@ mod tests {
     }
 
     #[test]
+    fn resolve_loopback_mounts_matches_manifest_mounts_case_insensitively() {
+        let manifest = Manifest {
+            version: "v1".to_string(),
+            name: "test".to_string(),
+            target: "target:latest".to_string(),
+            sources: Sources {
+                app: "app:latest".to_string(),
+                odyn: None,
+                sleeve: None,
+            },
+            signature: None,
+            ingress: None,
+            egress: None,
+            defaults: None,
+            api: None,
+            aux_api: None,
+            storage: Some(Storage {
+                s3: None,
+                mounts: Some(vec![HostFsMountConfig {
+                    name: "appdata".to_string(),
+                    mount_path: PathBuf::from("/mnt/appdata"),
+                    required: true,
+                    size_mb: 64,
+                }]),
+            }),
+            kms_integration: None,
+            helios_rpc: None,
+            clock_sync: None,
+        };
+
+        let requests = resolve_loopback_mounts(
+            &manifest,
+            &[RuntimeMountBinding {
+                name: "APPDATA".to_string(),
+                host_path: PathBuf::from("/var/lib/appdata"),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].name, "appdata");
+        assert_eq!(
+            requests[0].host_state_dir,
+            PathBuf::from("/var/lib/appdata")
+        );
+    }
+
+    #[test]
     fn resolve_loopback_mounts_rejects_unknown_binding() {
         let manifest = Manifest {
             version: "v1".to_string(),
@@ -437,7 +533,6 @@ mod tests {
             defaults: None,
             api: None,
             aux_api: None,
-            vsock_ports: None,
             storage: Some(Storage {
                 s3: None,
                 mounts: None,
@@ -460,5 +555,30 @@ mod tests {
             err.to_string()
                 .contains("manifest defines no storage.mounts")
         );
+    }
+
+    #[test]
+    fn prepare_loopback_mounts_rejects_duplicate_host_state_dirs() {
+        let requests = vec![
+            LoopbackMountRequest {
+                name: "appdata".to_string(),
+                host_state_dir: PathBuf::from("/tmp/hostfs-shared"),
+                container_mount_path: PathBuf::from("/mnt/enclaver-hostfs-data/appdata"),
+                enclave_mount_path: PathBuf::from("/mnt/appdata"),
+                size_mb: 64,
+                required: true,
+            },
+            LoopbackMountRequest {
+                name: "cache".to_string(),
+                host_state_dir: PathBuf::from("/tmp/hostfs-shared"),
+                container_mount_path: PathBuf::from("/mnt/enclaver-hostfs-data/cache"),
+                enclave_mount_path: PathBuf::from("/mnt/cache"),
+                size_mb: 64,
+                required: false,
+            },
+        ];
+
+        let err = prepare_loopback_mounts(&requests).unwrap_err().to_string();
+        assert!(err.contains("cannot share the same host state dir"));
     }
 }

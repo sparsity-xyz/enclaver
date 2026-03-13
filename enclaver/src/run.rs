@@ -1,11 +1,11 @@
 use crate::constants::{
-    APP_LOG_PORT, CLOCK_SYNC_PORT, EIF_FILE_NAME, HOSTFS_VSOCK_PORT_BASE, HOSTFS_VSOCK_PORT_LIMIT,
-    HTTP_EGRESS_VSOCK_PORT, MANIFEST_FILE_NAME, RELEASE_BUNDLE_DIR, STATUS_PORT,
+    APP_LOG_PORT, EIF_FILE_NAME, MANIFEST_FILE_NAME, RELEASE_BUNDLE_DIR, STATUS_PORT,
 };
 use crate::hostfs::CONTAINER_HOSTFS_ROOT;
 use crate::manifest::{Defaults, Manifest, load_manifest};
+use crate::runtime_vsock::{RuntimeHostVsockPorts, allocate_managed_enclave_cid};
 use crate::utils;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use futures_util::stream::StreamExt;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -22,8 +22,11 @@ use crate::nitro_cli::{EnclaveInfo, NitroCLI, RunEnclaveArgs};
 use crate::proxy::egress_http::HostHttpProxy;
 use crate::proxy::fs_host::HostFsProxy;
 use crate::proxy::ingress::HostProxy;
+use std::collections::HashSet;
 
-const LOG_VSOCK_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+const LOG_VSOCK_INITIAL_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+const LOG_VSOCK_MAX_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const LOG_VSOCK_RETRY_LIMIT: usize = 16;
 const STATUS_VSOCK_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const STATUS_VSOCK_RETRY_LIMIT: i32 = 100;
 const CLOCK_SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -31,6 +34,8 @@ const CLOCK_SYNC_MAX_REQUEST_LEN: usize = 16;
 
 const DEFAULT_CPU_COUNT: i32 = 2;
 const DEFAULT_MEMORY_MB: i32 = 4096;
+const HOST_RUNTIME_BIND_RETRY_LIMIT: usize = 16;
+const MANAGED_CID_CONFLICT_RETRY_LIMIT: usize = 8;
 
 pub struct EnclaveOpts {
     pub eif_path: Option<PathBuf>,
@@ -48,10 +53,9 @@ pub struct Enclave {
     memory_mb: i32,
     debug_mode: bool,
     enclave_info: Option<EnclaveInfo>,
+    runtime_vsock: Option<RuntimeHostVsockPorts>,
+    debug_console: Option<tokio::process::Child>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
-    status_port: u32,
-    app_log_port: u32,
-    http_egress_vsock_port: u32,
 }
 
 impl Enclave {
@@ -109,24 +113,8 @@ impl Enclave {
             }
         };
 
-        let status_port = manifest
-            .vsock_ports
-            .as_ref()
-            .and_then(|vp| vp.status_port)
-            .unwrap_or(STATUS_PORT);
-        let app_log_port = manifest
-            .vsock_ports
-            .as_ref()
-            .and_then(|vp| vp.app_log_port)
-            .unwrap_or(APP_LOG_PORT);
-        let http_egress_vsock_port = manifest
-            .vsock_ports
-            .as_ref()
-            .and_then(|vp| vp.http_egress_port)
-            .unwrap_or(HTTP_EGRESS_VSOCK_PORT);
-
         debug!(
-            "using vsock ports: status={status_port}, app_log={app_log_port}, http_egress={http_egress_vsock_port}"
+            "using fixed enclave-local vsock ports: status={STATUS_PORT}, app_log={APP_LOG_PORT}; host-side runtime ports will be derived from the managed enclave CID"
         );
 
         Ok(Self {
@@ -137,10 +125,9 @@ impl Enclave {
             memory_mb,
             debug_mode: opts.debug_mode,
             enclave_info: None,
+            runtime_vsock: None,
+            debug_console: None,
             tasks: Vec::new(),
-            status_port,
-            app_log_port,
-            http_egress_vsock_port,
         })
     }
 
@@ -151,26 +138,53 @@ impl Enclave {
             return Err(anyhow!("Enclave already started"));
         }
 
-        // Start the egress proxy before starting the enclave, to avoid (unlikely) race conditions
-        // where something inside the enclave attempts egress before the proxy is ready.
-        self.start_egress_proxy().await?;
+        let mut conflict_rejected_cids = HashSet::new();
+        let enclave_info = loop {
+            ensure_managed_cid_retry_budget(&conflict_rejected_cids)?;
 
-        self.start_hostfs_proxies()?;
+            let runtime_vsock = self.prepare_host_runtime(&conflict_rejected_cids).await?;
+            self.runtime_vsock = Some(runtime_vsock.clone());
 
-        // Start clock sync time server before the enclave so it's ready when odyn boots.
-        self.start_clock_sync_server()?;
-
-        info!("starting enclave");
-        let enclave_info = self
-            .cli
-            .run_enclave(RunEnclaveArgs {
-                cpu_count: self.cpu_count,
-                memory_mb: self.memory_mb,
-                eif_path: self.eif_path.clone(),
-                cid: None,
-                debug_mode: self.debug_mode,
-            })
-            .await?;
+            info!(
+                "starting enclave with managed CID={} host_runtime_ports{{egress={}, clock_sync={}}}",
+                runtime_vsock.enclave_cid, runtime_vsock.egress_port, runtime_vsock.clock_sync_port
+            );
+            match self
+                .cli
+                .run_enclave(RunEnclaveArgs {
+                    cpu_count: self.cpu_count,
+                    memory_mb: self.memory_mb,
+                    eif_path: self.eif_path.clone(),
+                    cid: Some(runtime_vsock.enclave_cid),
+                    debug_mode: self.debug_mode,
+                })
+                .await
+            {
+                Ok(info) => break info,
+                Err(err) if is_managed_cid_conflict_error(&err) => {
+                    warn!(
+                        "managed CID {} was claimed before nitro-cli run-enclave completed: {err:#}; retrying with a different CID",
+                        runtime_vsock.enclave_cid
+                    );
+                    conflict_rejected_cids.insert(runtime_vsock.enclave_cid);
+                    if let Err(cleanup_err) = self.cleanup_running_state().await {
+                        return Err(cleanup_err.context(format!(
+                            "failed to clean up after managed CID {} start collision",
+                            runtime_vsock.enclave_cid
+                        )));
+                    }
+                }
+                Err(err) => {
+                    if let Err(cleanup_err) = self.cleanup_running_state().await {
+                        error!("error cleaning up after failed enclave start: {cleanup_err}");
+                    }
+                    return Err(err.context(format!(
+                        "failed to start enclave with managed CID {}",
+                        runtime_vsock.enclave_cid
+                    )));
+                }
+            }
+        };
 
         self.enclave_info = Some(enclave_info.clone());
 
@@ -179,40 +193,88 @@ impl Enclave {
             enclave_info.id, enclave_info.cid
         );
 
-        if self.debug_mode {
-            // TODO: Should we let an an EOF from the console terminate run?
-            self.attach_debug_console(&enclave_info.id).await?;
-        }
-
-        self.start_odyn_log_stream(enclave_info.cid)?;
-
-        self.start_ingress_proxies(enclave_info.cid).await?;
+        self.complete_post_start_setup_or_cleanup(&enclave_info)
+            .await?;
 
         let exit_res = tokio::select! {
-            exit_res = Enclave::await_exit(enclave_info.cid, self.status_port) =>
+            exit_res = Enclave::await_exit(enclave_info.cid, STATUS_PORT) =>
                 exit_res,
 
             _ = cancellation.cancelled() =>
                 Ok(EnclaveExitStatus::Cancelled),
         };
 
-        if let Err(err) = self.cleanup().await {
-            error!("error terminating enclave: {err}");
+        self.finalize_exit_and_cleanup(exit_res).await
+    }
+
+    async fn prepare_host_runtime(
+        &mut self,
+        conflict_rejected_cids: &HashSet<u32>,
+    ) -> Result<RuntimeHostVsockPorts> {
+        let mut bind_unavailable_cids = conflict_rejected_cids.clone();
+        for attempt in 1..=HOST_RUNTIME_BIND_RETRY_LIMIT {
+            let runtime_vsock = self
+                .select_runtime_vsock_ports(&bind_unavailable_cids)
+                .await?;
+
+            debug!(
+                "attempting host runtime reservation with managed CID={} egress_port={} clock_sync_port={} (attempt {}/{})",
+                runtime_vsock.enclave_cid,
+                runtime_vsock.egress_port,
+                runtime_vsock.clock_sync_port,
+                attempt,
+                HOST_RUNTIME_BIND_RETRY_LIMIT
+            );
+
+            let allow_degraded_clock_sync = attempt == HOST_RUNTIME_BIND_RETRY_LIMIT;
+            let start_result = async {
+                // Start host-side services before the enclave so they are ready
+                // when Odyn begins dialing host VSOCK endpoints.
+                self.start_egress_proxy(&runtime_vsock).await?;
+                self.start_hostfs_proxies(&runtime_vsock)?;
+                self.start_clock_sync_server(&runtime_vsock, allow_degraded_clock_sync)?;
+                Ok(())
+            }
+            .await;
+
+            match start_result {
+                Ok(()) => return Ok(runtime_vsock),
+                Err(err) if is_addr_in_use_error(&err) => {
+                    bind_unavailable_cids.insert(runtime_vsock.enclave_cid);
+                    warn!(
+                        "managed CID {} collided on a derived host runtime VSOCK port (attempt {}/{}): {err:#}; retrying with a different managed CID",
+                        runtime_vsock.enclave_cid, attempt, HOST_RUNTIME_BIND_RETRY_LIMIT
+                    );
+                    self.abort_tasks().await;
+                    continue;
+                }
+                Err(err) => {
+                    self.abort_tasks().await;
+                    return Err(err);
+                }
+            }
         }
 
-        match exit_res {
-            Ok(EnclaveExitStatus::Exited(code)) => info!("enclave exited with code {code}"),
-            Ok(EnclaveExitStatus::Signaled(signal)) => {
-                info!("enclave stopped due to signal {signal}")
-            }
-            Ok(EnclaveExitStatus::Fatal(ref error)) => {
-                info!("enclave exited due to fatal error: {error}")
-            }
-            Ok(EnclaveExitStatus::Cancelled) => (),
-            Err(ref err) => error!("error waing for enclave exit: {err}"),
-        };
+        Err(anyhow!(
+            "failed to reserve host-side runtime VSOCK ports after {} attempts",
+            HOST_RUNTIME_BIND_RETRY_LIMIT
+        ))
+    }
 
-        exit_res
+    async fn select_runtime_vsock_ports(
+        &self,
+        excluded_cids: &HashSet<u32>,
+    ) -> Result<RuntimeHostVsockPorts> {
+        let mut used_cids = self
+            .cli
+            .describe_enclaves()
+            .await?
+            .into_iter()
+            .map(|enclave| enclave.cid)
+            .collect::<HashSet<_>>();
+        used_cids.extend(excluded_cids.iter().copied());
+        let cid = allocate_managed_enclave_cid(&used_cids)?;
+        RuntimeHostVsockPorts::for_cid(cid)
     }
 
     async fn start_ingress_proxies(&mut self, cid: u32) -> Result<()> {
@@ -236,18 +298,27 @@ impl Enclave {
         Ok(())
     }
 
-    async fn start_egress_proxy(&mut self) -> Result<()> {
+    async fn start_egress_proxy(&mut self, runtime_vsock: &RuntimeHostVsockPorts) -> Result<()> {
         // Note: we _could_ start the egress proxy no matter what, but there is no sense in it,
         // and skipping it seems (barely) safer - so we may as well.
-        if self.manifest.egress.is_none() {
+        if !self.manifest.egress_proxy_enabled() {
             info!("no egress defined, no egress proxy will be started");
             return Ok(());
         }
 
-        let preferred_port = self.http_egress_vsock_port;
-        let (proxy, actual_port) = HostHttpProxy::bind_auto(preferred_port, 10)?;
-        self.http_egress_vsock_port = actual_port;
-        info!("egress proxy bound to vsock port {actual_port}");
+        let proxy = HostHttpProxy::bind(runtime_vsock.egress_port).map_err(|err| {
+            annotate_host_vsock_bind_error(
+                err,
+                format!(
+                    "host egress proxy vsock port {} for managed CID {}",
+                    runtime_vsock.egress_port, runtime_vsock.enclave_cid
+                ),
+            )
+        })?;
+        info!(
+            "egress proxy bound to host-side vsock port {} for managed CID {}",
+            runtime_vsock.egress_port, runtime_vsock.enclave_cid
+        );
         self.tasks.push(utils::spawn!("egress proxy", async move {
             proxy.serve().await;
         })?);
@@ -255,27 +326,23 @@ impl Enclave {
         Ok(())
     }
 
-    fn start_hostfs_proxies(&mut self) -> Result<()> {
+    fn start_hostfs_proxies(&mut self, runtime_vsock: &RuntimeHostVsockPorts) -> Result<()> {
         let Some(mounts) = self.manifest.hostfs_mounts() else {
             info!("no hostfs mounts defined, no hostfs proxies will be started");
             return Ok(());
         };
 
-        // Mount order in the manifest defines the hostfs vsock port assignment.
-        // Odyn uses the same deterministic mapping when it mounts the enclave-side
-        // FUSE filesystems, so both sides must walk the list in the same order.
+        // Mount order in the manifest defines the hostfs offset within the
+        // per-enclave runtime VSOCK block. Odyn derives the same host-side
+        // port from its local CID, so both sides must walk the list in the
+        // same order.
         for (index, mount) in mounts.iter().enumerate() {
-            let port = HOSTFS_VSOCK_PORT_BASE
-                .checked_add(index as u32)
-                .ok_or_else(|| anyhow!("hostfs port allocation overflowed"))?;
-            if port > HOSTFS_VSOCK_PORT_LIMIT {
-                return Err(anyhow!(
-                    "hostfs mount '{}' exceeds the configured vsock port range {}-{}",
-                    mount.name,
-                    HOSTFS_VSOCK_PORT_BASE,
-                    HOSTFS_VSOCK_PORT_LIMIT
-                ));
-            }
+            let port = runtime_vsock.hostfs_mount_port(index).map_err(|err| {
+                anyhow!(
+                    "hostfs mount '{}' cannot be assigned a vsock port: {err}",
+                    mount.name
+                )
+            })?;
 
             let root = PathBuf::from(CONTAINER_HOSTFS_ROOT).join(&mount.name);
             if !root.exists() {
@@ -295,11 +362,19 @@ impl Enclave {
                 continue;
             }
 
-            let proxy = HostFsProxy::bind(&mount.name, root, false, port)?;
+            let proxy = HostFsProxy::bind(&mount.name, root, false, port).map_err(|err| {
+                annotate_host_vsock_bind_error(
+                    err,
+                    format!(
+                        "hostfs mount '{}' host-side vsock port {} for managed CID {}",
+                        mount.name, port, runtime_vsock.enclave_cid
+                    ),
+                )
+            })?;
 
             info!(
-                "starting hostfs proxy for mount '{}' on vsock port {}",
-                mount.name, port
+                "starting hostfs proxy for mount '{}' on host-side vsock port {} (managed CID {})",
+                mount.name, port, runtime_vsock.enclave_cid
             );
             self.tasks.push(utils::spawn!(
                 &format!("hostfs proxy ({})", mount.name),
@@ -312,7 +387,11 @@ impl Enclave {
         Ok(())
     }
 
-    fn start_clock_sync_server(&mut self) -> Result<()> {
+    fn start_clock_sync_server(
+        &mut self,
+        runtime_vsock: &RuntimeHostVsockPorts,
+        allow_degraded_addr_in_use: bool,
+    ) -> Result<()> {
         let clock_sync = self.manifest.effective_clock_sync();
 
         if !clock_sync.enabled {
@@ -320,20 +399,23 @@ impl Enclave {
             return Ok(());
         }
 
-        info!("starting host-side clock sync time server on vsock port {CLOCK_SYNC_PORT}");
+        info!(
+            "starting host-side clock sync time server on vsock port {} for managed CID {}",
+            runtime_vsock.clock_sync_port, runtime_vsock.enclave_cid
+        );
 
-        let listener = match crate::vsock::serve(CLOCK_SYNC_PORT) {
+        let binding = format!(
+            "clock sync host time server vsock port {} for managed CID {}",
+            runtime_vsock.clock_sync_port, runtime_vsock.enclave_cid
+        );
+        let listener = match crate::vsock::serve(runtime_vsock.clock_sync_port) {
             Ok(listener) => listener,
-            Err(e) => {
-                let source = if self.manifest.clock_sync.is_some() {
-                    "configured in manifest"
-                } else {
-                    "enabled by default"
-                };
-                warn!(
-                    "clock sync is {source}, but failed to bind host time server on vsock port {CLOCK_SYNC_PORT}: {e}; continuing without host clock sync"
+            Err(err) => {
+                return handle_clock_sync_bind_error(
+                    annotate_host_vsock_bind_error(err, binding),
+                    runtime_vsock,
+                    allow_degraded_addr_in_use,
                 );
-                return Ok(());
             }
         };
         self.tasks
@@ -352,18 +434,14 @@ impl Enclave {
     }
 
     fn start_odyn_log_stream(&mut self, cid: u32) -> Result<()> {
-        let app_log_port = self.app_log_port;
         self.tasks
             .push(utils::spawn!("odyn log stream", async move {
                 info!("waiting for enclave to boot to stream logs");
-                let conn = loop {
-                    match VsockStream::connect(cid, app_log_port).await {
-                        Ok(conn) => break conn,
-
-                        // TODO: improve the polling frequency / backoff / timeout
-                        Err(_) => {
-                            tokio::time::sleep(LOG_VSOCK_RETRY_INTERVAL).await;
-                        }
+                let conn = match connect_to_odyn_log_stream(cid).await {
+                    Ok(conn) => conn,
+                    Err(err) => {
+                        error!("{err:#}");
+                        return;
                     }
                 };
 
@@ -378,6 +456,10 @@ impl Enclave {
 
     async fn await_exit(cid: u32, status_port: u32) -> Result<EnclaveExitStatus> {
         let mut failed_attempts = 0;
+        // Once the status channel has been established, we keep reconnecting on
+        // unexpected disconnects until the caller cancels `run()` or we exceed
+        // the connect retry budget below.
+        let mut reconnects_after_disconnect = 0u32;
 
         loop {
             let conn = match VsockStream::connect(cid, status_port).await {
@@ -395,6 +477,16 @@ impl Enclave {
                 }
             };
 
+            // Keep the total connect-failure budget across the entire wait
+            // loop. If the status port repeatedly drops and later reconnects,
+            // we still want to fail after enough consecutive connect failures
+            // rather than silently waiting forever.
+            if reconnects_after_disconnect > 0 {
+                warn!(
+                    "reconnected to enclave status port after {} unexpected disconnect(s)",
+                    reconnects_after_disconnect
+                );
+            }
             debug!("connected to enclave status port");
 
             let mut framed = FramedRead::new(conn, LinesCodec::new_with_max_length(1024));
@@ -432,6 +524,7 @@ impl Enclave {
                 }
             }
 
+            reconnects_after_disconnect = reconnects_after_disconnect.saturating_add(1);
             error!("enclave status port closed unexpectedly");
         }
     }
@@ -439,7 +532,9 @@ impl Enclave {
     async fn attach_debug_console(&mut self, enclave_id: &str) -> Result<()> {
         info!("attaching to debug console");
 
-        let stdout = self.cli.console(enclave_id).await?;
+        let console = self.cli.console(enclave_id).await?;
+        let (child, stdout) = console.into_parts()?;
+        self.debug_console = Some(child);
 
         self.tasks.push(tokio::task::spawn(async move {
             if let Err(e) = utils::log_lines_from_stream("nitro-cli::console", stdout).await {
@@ -450,15 +545,101 @@ impl Enclave {
         Ok(())
     }
 
-    async fn cleanup(self) -> Result<()> {
-        if let Some(enclave_info) = self.enclave_info {
-            debug!("terminating enclave");
-            self.cli.terminate_enclave(&enclave_info.id).await?;
-        } else {
-            debug!("no enclave to stop");
+    async fn complete_post_start_setup(&mut self, enclave_info: &EnclaveInfo) -> Result<()> {
+        if self.debug_mode {
+            // TODO: Should we let an EOF from the console terminate run?
+            self.attach_debug_console(&enclave_info.id).await?;
         }
 
-        for task in self.tasks {
+        self.start_odyn_log_stream(enclave_info.cid)?;
+        self.start_ingress_proxies(enclave_info.cid).await
+    }
+
+    async fn complete_post_start_setup_or_cleanup(
+        &mut self,
+        enclave_info: &EnclaveInfo,
+    ) -> Result<()> {
+        let setup_result = self.complete_post_start_setup(enclave_info).await;
+        let Err(err) = setup_result else {
+            return Ok(());
+        };
+
+        let setup_err = err.context(format!(
+            "failed to finish post-start host setup for enclave {}",
+            enclave_info.id
+        ));
+        match self.cleanup_running_state().await {
+            Ok(()) => Err(setup_err),
+            Err(cleanup_err) => Err(cleanup_err.context(format!(
+                "failed to clean up after post-start setup failure for enclave {}: {setup_err:#}",
+                enclave_info.id
+            ))),
+        }
+    }
+
+    async fn finalize_exit_and_cleanup(
+        &mut self,
+        exit_res: Result<EnclaveExitStatus>,
+    ) -> Result<EnclaveExitStatus> {
+        let cleanup_result = self.cleanup_running_state().await;
+
+        match (exit_res, cleanup_result) {
+            (Ok(status), Ok(())) => {
+                log_enclave_exit_status(&status);
+                Ok(status)
+            }
+            (Err(err), Ok(())) => {
+                error!("error waiting for enclave exit: {err}");
+                Err(err)
+            }
+            (Ok(status), Err(cleanup_err)) => {
+                log_enclave_exit_status(&status);
+                Err(cleanup_err.context(format!(
+                    "enclave {} but cleanup failed",
+                    describe_enclave_exit_status(&status)
+                )))
+            }
+            (Err(err), Err(cleanup_err)) => Err(cleanup_err.context(format!(
+                "cleanup failed after waiting for enclave exit also failed: {err:#}"
+            ))),
+        }
+    }
+
+    async fn cleanup_running_state(&mut self) -> Result<()> {
+        // Best-effort cleanup: always tear down local runtime state, but keep
+        // the enclave ID if terminate-enclave fails so the caller still knows
+        // which enclave remained running.
+        let terminate_result = if let Some(enclave_info) = self.enclave_info.as_ref() {
+            debug!("terminating enclave");
+            self.cli
+                .terminate_enclave(&enclave_info.id)
+                .await
+                .context(format!("failed to terminate enclave {}", enclave_info.id))
+        } else {
+            debug!("no enclave to stop");
+            Ok(())
+        };
+        self.stop_debug_console().await;
+        self.runtime_vsock = None;
+        self.abort_tasks().await;
+        if terminate_result.is_ok() {
+            self.enclave_info = None;
+        }
+
+        terminate_result
+    }
+
+    async fn stop_debug_console(&mut self) {
+        if let Some(console) = &mut self.debug_console
+            && let Err(err) = stop_child_process(console, "nitro-cli debug console").await
+        {
+            error!("error stopping nitro-cli debug console: {err:#}");
+        }
+        self.debug_console = None;
+    }
+
+    async fn abort_tasks(&mut self) {
+        for task in std::mem::take(&mut self.tasks) {
             task.abort();
             match task.await {
                 Ok(_) => {}
@@ -467,9 +648,131 @@ impl Enclave {
                 }
             };
         }
-
-        Ok(())
     }
+}
+
+fn describe_enclave_exit_status(status: &EnclaveExitStatus) -> String {
+    match status {
+        EnclaveExitStatus::Exited(code) => format!("exited with code {code}"),
+        EnclaveExitStatus::Signaled(signal) => format!("stopped due to signal {signal}"),
+        EnclaveExitStatus::Fatal(error) => format!("exited due to fatal error: {error}"),
+        EnclaveExitStatus::Cancelled => "was cancelled".to_string(),
+    }
+}
+
+fn log_enclave_exit_status(status: &EnclaveExitStatus) {
+    match status {
+        EnclaveExitStatus::Exited(code) => info!("enclave exited with code {code}"),
+        EnclaveExitStatus::Signaled(signal) => {
+            info!("enclave stopped due to signal {signal}")
+        }
+        EnclaveExitStatus::Fatal(error) => {
+            info!("enclave exited due to fatal error: {error}")
+        }
+        EnclaveExitStatus::Cancelled => {}
+    }
+}
+
+async fn connect_to_odyn_log_stream(cid: u32) -> Result<VsockStream> {
+    let mut delay = LOG_VSOCK_INITIAL_RETRY_INTERVAL;
+
+    for attempt in 1..=LOG_VSOCK_RETRY_LIMIT {
+        match VsockStream::connect(cid, APP_LOG_PORT).await {
+            Ok(conn) => return Ok(conn),
+            Err(err) if attempt == LOG_VSOCK_RETRY_LIMIT => {
+                return Err(anyhow!(
+                    "failed to connect to enclave log port after {} attempts: {}",
+                    LOG_VSOCK_RETRY_LIMIT,
+                    err
+                ));
+            }
+            Err(err) => {
+                debug!(
+                    "enclave log port not ready yet (attempt {}/{}): {}; retrying in {:?}",
+                    attempt, LOG_VSOCK_RETRY_LIMIT, err, delay
+                );
+                tokio::time::sleep(delay).await;
+                delay = next_log_vsock_retry_delay(delay);
+            }
+        }
+    }
+
+    unreachable!("log stream retry loop always returns within the configured retry budget")
+}
+
+fn next_log_vsock_retry_delay(current: Duration) -> Duration {
+    current.saturating_mul(2).min(LOG_VSOCK_MAX_RETRY_INTERVAL)
+}
+
+async fn stop_child_process(child: &mut tokio::process::Child, what: &str) -> Result<()> {
+    if let Some(status) = child.try_wait()? {
+        debug!("{what} already exited with status {status}");
+        return Ok(());
+    }
+
+    child
+        .kill()
+        .await
+        .map_err(|err| anyhow!("failed to terminate {what}: {err}"))?;
+    Ok(())
+}
+
+fn annotate_host_vsock_bind_error(err: anyhow::Error, binding: String) -> anyhow::Error {
+    if is_addr_in_use_error(&err) {
+        err.context(format!(
+            "failed to bind {binding}: the derived host-side VSOCK port is already in use"
+        ))
+    } else {
+        err.context(format!("failed to bind {binding}"))
+    }
+}
+
+fn is_addr_in_use_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<std::io::Error>(),
+            Some(io_err) if io_err.kind() == std::io::ErrorKind::AddrInUse
+        )
+    })
+}
+
+fn is_managed_cid_conflict_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<crate::nitro_cli::NitroCliCommandFailure>()
+            .is_some_and(|failure| failure.indicates_cid_conflict())
+    })
+}
+
+fn handle_clock_sync_bind_error(
+    err: anyhow::Error,
+    runtime_vsock: &RuntimeHostVsockPorts,
+    allow_degraded_addr_in_use: bool,
+) -> Result<()> {
+    if is_addr_in_use_error(&err) {
+        if !allow_degraded_addr_in_use {
+            return Err(err);
+        }
+        warn!(
+            "failed to bind host-side clock sync time server on vsock port {} for managed CID {} after exhausting managed CID retries: {err:#}; continuing without a dedicated clock sync listener",
+            runtime_vsock.clock_sync_port, runtime_vsock.enclave_cid
+        );
+        return Ok(());
+    }
+
+    Err(err)
+}
+
+fn ensure_managed_cid_retry_budget(conflict_rejected_cids: &HashSet<u32>) -> Result<()> {
+    if conflict_rejected_cids.len() >= MANAGED_CID_CONFLICT_RETRY_LIMIT {
+        anyhow::bail!(
+            "failed to start enclave after {} managed CID conflict retries; exhausted CIDs: {:?}",
+            MANAGED_CID_CONFLICT_RETRY_LIMIT,
+            conflict_rejected_cids
+        );
+    }
+
+    Ok(())
 }
 
 /// Handle a single clock sync time request from the enclave.
@@ -511,12 +814,294 @@ async fn handle_time_request(stream: tokio_vsock::VsockStream) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::{Ingress, Manifest, Sources};
+    use crate::nitro_cli::NitroCliCommandFailure;
+    use crate::runtime_vsock::RuntimeHostVsockPorts;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Stdio;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tempfile::tempdir;
+    use tokio::process::Command;
+
+    struct FlagOnDrop(Arc<AtomicBool>);
+
+    struct MockNitroCli {
+        _dir: tempfile::TempDir,
+        path: PathBuf,
+    }
+
+    impl Drop for FlagOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn minimal_manifest() -> Manifest {
+        Manifest {
+            version: "v1".to_string(),
+            name: "test".to_string(),
+            target: "target:latest".to_string(),
+            sources: Sources {
+                app: "app:latest".to_string(),
+                odyn: None,
+                sleeve: None,
+            },
+            signature: None,
+            ingress: None,
+            egress: None,
+            defaults: None,
+            api: None,
+            aux_api: None,
+            storage: None,
+            kms_integration: None,
+            helios_rpc: None,
+            clock_sync: None,
+        }
+    }
+
+    fn write_mock_nitro_cli() -> MockNitroCli {
+        let dir = tempdir().expect("create tempdir");
+        let script_path = dir.path().join("nitro-cli");
+        fs::write(
+            &script_path,
+            r#"#!/bin/sh
+if [ "$1" = "terminate-enclave" ]; then
+  printf '{"EnclaveID":"enc-test","Terminated":true}\n'
+  exit 0
+fi
+echo "unexpected nitro-cli args: $*" >&2
+exit 1
+"#,
+        )
+        .expect("write mock nitro-cli");
+        let mut perms = fs::metadata(&script_path)
+            .expect("stat mock nitro-cli")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("chmod mock nitro-cli");
+        MockNitroCli {
+            _dir: dir,
+            path: script_path,
+        }
+    }
+
+    #[test]
+    fn managed_cid_conflict_detection_requires_nitro_cli_stderr_match() {
+        let err = anyhow::Error::new(NitroCliCommandFailure::new(
+            "run-enclave --enclave-cid 19".to_string(),
+            std::process::ExitStatus::from_raw(1 << 8),
+            "Enclave CID 19 is already in use by another enclave".to_string(),
+        ));
+        assert!(is_managed_cid_conflict_error(&err));
+
+        let other = anyhow::Error::msg("some unrelated startup failure");
+        assert!(!is_managed_cid_conflict_error(&other));
+    }
+
+    #[test]
+    fn clock_sync_addr_in_use_degrades_gracefully() {
+        let runtime_vsock = RuntimeHostVsockPorts::for_cid(16).unwrap();
+        let err = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "port already in use",
+        ));
+        assert!(handle_clock_sync_bind_error(err, &runtime_vsock, true).is_ok());
+    }
+
+    #[test]
+    fn clock_sync_addr_in_use_retries_before_degrading() {
+        let runtime_vsock = RuntimeHostVsockPorts::for_cid(16).unwrap();
+        let err = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "port already in use",
+        ));
+        assert!(handle_clock_sync_bind_error(err, &runtime_vsock, false).is_err());
+    }
+
+    #[test]
+    fn clock_sync_non_addr_in_use_still_errors() {
+        let runtime_vsock = RuntimeHostVsockPorts::for_cid(16).unwrap();
+        let err = anyhow::Error::msg("some other failure");
+        assert!(handle_clock_sync_bind_error(err, &runtime_vsock, true).is_err());
+    }
+
+    #[test]
+    fn managed_cid_retry_budget_is_bounded() {
+        let budget = (0..MANAGED_CID_CONFLICT_RETRY_LIMIT as u32).collect::<HashSet<_>>();
+        let err = ensure_managed_cid_retry_budget(&budget)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("managed CID conflict retries"));
+    }
+
+    #[test]
+    fn log_stream_retry_delay_caps_at_maximum() {
+        assert_eq!(
+            next_log_vsock_retry_delay(LOG_VSOCK_INITIAL_RETRY_INTERVAL),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            next_log_vsock_retry_delay(LOG_VSOCK_MAX_RETRY_INTERVAL),
+            LOG_VSOCK_MAX_RETRY_INTERVAL
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_child_process_kills_and_reaps_child() {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep child");
+
+        stop_child_process(&mut child, "test child")
+            .await
+            .expect("stop child");
+
+        assert!(child.try_wait().expect("query child state").is_some());
+    }
+
+    #[tokio::test]
+    async fn cleanup_running_state_preserves_enclave_info_when_terminate_fails() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = FlagOnDrop(dropped.clone());
+        let task = tokio::spawn(async move {
+            let _guard = guard;
+            futures_util::future::pending::<()>().await;
+        });
+
+        let debug_console = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn debug console child");
+
+        let enclave_info = EnclaveInfo {
+            name: "test".to_string(),
+            id: "enc-test".to_string(),
+            process_id: 1234,
+            cid: 16,
+        };
+        let mut enclave = Enclave {
+            cli: NitroCLI::with_program("/definitely/missing/nitro-cli"),
+            eif_path: PathBuf::from("/tmp/test.eif"),
+            manifest: minimal_manifest(),
+            cpu_count: 2,
+            memory_mb: 4096,
+            debug_mode: true,
+            enclave_info: Some(enclave_info.clone()),
+            runtime_vsock: Some(RuntimeHostVsockPorts::for_cid(enclave_info.cid).unwrap()),
+            debug_console: Some(debug_console),
+            tasks: vec![task],
+        };
+
+        let err = enclave
+            .cleanup_running_state()
+            .await
+            .expect_err("terminate-enclave should fail for a missing nitro-cli binary");
+        assert!(err.to_string().contains("failed to terminate enclave"));
+        assert_eq!(enclave.enclave_info, Some(enclave_info));
+        assert!(enclave.runtime_vsock.is_none());
+        assert!(enclave.debug_console.is_none());
+        assert!(enclave.tasks.is_empty());
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn post_start_setup_failure_triggers_cleanup() {
+        let ingress_conflict =
+            std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve ingress port");
+        let ingress_port = ingress_conflict.local_addr().expect("ingress addr").port();
+        let mock_nitro_cli = write_mock_nitro_cli();
+
+        let enclave_info = EnclaveInfo {
+            name: "test".to_string(),
+            id: "enc-test".to_string(),
+            process_id: 1234,
+            cid: 16,
+        };
+        let mut manifest = minimal_manifest();
+        manifest.ingress = Some(vec![Ingress {
+            listen_port: ingress_port,
+        }]);
+
+        let mut enclave = Enclave {
+            cli: NitroCLI::with_program(mock_nitro_cli.path.display().to_string()),
+            eif_path: PathBuf::from("/tmp/test.eif"),
+            manifest,
+            cpu_count: 2,
+            memory_mb: 4096,
+            debug_mode: false,
+            enclave_info: Some(enclave_info.clone()),
+            runtime_vsock: Some(RuntimeHostVsockPorts::for_cid(enclave_info.cid).unwrap()),
+            debug_console: None,
+            tasks: Vec::new(),
+        };
+
+        let err = enclave
+            .complete_post_start_setup_or_cleanup(&enclave_info)
+            .await
+            .expect_err("ingress bind failure should abort post-start setup");
+        assert!(
+            err.to_string()
+                .contains("failed to finish post-start host setup")
+        );
+        assert!(enclave.enclave_info.is_none());
+        assert!(enclave.runtime_vsock.is_none());
+        assert!(enclave.tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn finalize_exit_and_cleanup_returns_error_when_cleanup_fails() {
+        let enclave_info = EnclaveInfo {
+            name: "test".to_string(),
+            id: "enc-test".to_string(),
+            process_id: 1234,
+            cid: 16,
+        };
+        let mut enclave = Enclave {
+            cli: NitroCLI::with_program("/definitely/missing/nitro-cli"),
+            eif_path: PathBuf::from("/tmp/test.eif"),
+            manifest: minimal_manifest(),
+            cpu_count: 2,
+            memory_mb: 4096,
+            debug_mode: false,
+            enclave_info: Some(enclave_info.clone()),
+            runtime_vsock: Some(RuntimeHostVsockPorts::for_cid(enclave_info.cid).unwrap()),
+            debug_console: None,
+            tasks: Vec::new(),
+        };
+
+        let err = enclave
+            .finalize_exit_and_cleanup(Ok(EnclaveExitStatus::Exited(0)))
+            .await
+            .expect_err("cleanup failure should propagate to the caller");
+        let rendered = err.to_string();
+        assert!(rendered.contains("cleanup failed"));
+        assert!(rendered.contains("exited with code 0"));
+        assert_eq!(enclave.enclave_info, Some(enclave_info));
+    }
+}
+
 fn current_unix_timestamp() -> Result<(i64, u32)> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| anyhow!("system time error: {e}"))?;
 
-    Ok((now.as_secs() as i64, now.subsec_nanos()))
+    let secs = i64::try_from(now.as_secs())
+        .map_err(|_| anyhow!("system time seconds do not fit into i64"))?;
+
+    Ok((secs, now.subsec_nanos()))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

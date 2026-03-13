@@ -31,7 +31,7 @@ impl ApiService {
 
                 // Load AWS config from IMDS (EC2 instance metadata) via proxy
                 // inside an enclave, we MUST use a proxy to reach IMDS
-                let proxy_uri = config.egress_proxy_uri().ok_or_else(|| {
+                let proxy_uri = config.egress_proxy_uri()?.ok_or_else(|| {
                     anyhow::anyhow!("Egress proxy is not configured, but is required for AWS IMDS access inside the enclave.")
                 })?;
 
@@ -44,9 +44,6 @@ impl ApiService {
                     enclaver::integrations::aws_util::new_proxied_client(proxy_uri.clone())?;
                 let imds =
                     enclaver::integrations::aws_util::imds_client_with_proxy(proxy_uri).await?;
-
-                // Small delay to ensure egress proxy is fully up and ready to handle vsock requests
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
                 let aws_config =
                     enclaver::integrations::aws_util::load_config_from_imds(imds).await?;

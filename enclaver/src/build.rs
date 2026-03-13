@@ -437,6 +437,9 @@ pub struct ResolvedSources {
 
 #[cfg(test)]
 mod tests {
+    // Intentionally strict: these tests treat selected docs/workflows/scripts
+    // as part of the product contract, so CI fails fast when code and
+    // user-facing operational guidance drift apart.
     use super::NITRO_CLI_IMAGE;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -689,6 +692,8 @@ mod tests {
 
     #[test]
     fn documentation_describes_current_hostfs_and_nitro_cli_model() {
+        // Intentionally strict: these checks pin the user-facing docs to the
+        // current runtime/deployment contract so doc drift fails fast in CI.
         let root = repo_root();
         let read = |rel_path: &str| {
             let path = root.join(rel_path);
@@ -697,24 +702,53 @@ mod tests {
 
         let readme = read("README.md");
         assert!(
-            readme.contains("Host-Backed Directory Mounts"),
-            "README should use the current host-backed directory mount terminology"
+            readme.contains("## Enclaver Highlights"),
+            "README should summarize Enclaver's core capabilities in a dedicated highlights section"
+        );
+        assert!(
+            readme.contains("[Host-Backed Directory Mounts Guide](docs/host_backed_mounts.md)"),
+            "README should point readers to the dedicated host-backed mounts guide instead of inlining the feature details"
         );
 
-        let hostfs_doc = read("docs/host_backed_mounts_design.md");
+        let hostfs_doc = read("docs/host_backed_mounts.md");
         assert!(
-            hostfs_doc.contains("Host-Backed Temporary Directory"),
-            "hostfs design doc should note the Nova-style temporary-directory terminology"
+            hostfs_doc.to_ascii_lowercase().contains("host-backed")
+                && hostfs_doc
+                    .to_ascii_lowercase()
+                    .contains("temporary directory"),
+            "hostfs design doc should describe the temporary-directory behavior without relying on external product naming"
         );
         assert!(
-            hostfs_doc.contains("Whether the directory behaves as \"temporary\" or \"persistent\""),
+            hostfs_doc.contains("Whether the mount behaves as \"temporary\" or \"persistent\""),
             "hostfs design doc should explain that persistence depends on host_state_dir reuse"
+        );
+        assert!(
+            !hostfs_doc.contains("Nova Platform") && !hostfs_doc.contains("/opt/nova/"),
+            "hostfs design doc should avoid Nova Platform-specific naming or example paths"
         );
 
         let cli_doc = read("docs/enclaver-cli.md");
         assert!(
             cli_doc.contains("hostfs file proxy"),
             "CLI docs should explain that --mount uses the hostfs file proxy"
+        );
+        assert!(
+            cli_doc.contains("separate `enclaver run` processes can coexist on the same EC2"),
+            "CLI docs should document the current multi-instance runtime support"
+        );
+
+        let port_doc = read("docs/port_handling.md");
+        assert!(
+            port_doc.contains("Multiple `enclaver run` processes can run on the same EC2 instance"),
+            "port handling docs should call out the current multi-instance runtime support"
+        );
+        assert!(
+            port_doc.contains("20000 + (CID * 128) + 0"),
+            "port handling docs should describe the CID-derived host-side egress port formula"
+        );
+        assert!(
+            port_doc.contains("20000 + (CID * 128) + 16 + N"),
+            "port handling docs should describe the CID-derived host-side hostfs port formula"
         );
 
         let base_images_doc = read("docs/base-images.md");
@@ -731,7 +765,7 @@ mod tests {
             "base image docs should state that Sleeve publishing is currently linux/amd64 only"
         );
 
-        let image_build_doc = read("docs/BUILDING_IMAGES.md");
+        let image_build_doc = read("docs/building_images_guidance.md");
         assert!(
             image_build_doc.contains("The helper is currently `x86_64`-only"),
             "image build docs should explain that the default local sleeve helper currently requires x86_64"
@@ -767,6 +801,43 @@ mod tests {
         assert!(
             nitro_cli_doc.contains("linux/amd64"),
             "nitro-cli doc should document the current publish architecture"
+        );
+        assert!(
+            !nitro_cli_doc.contains("Nova Platform"),
+            "nitro-cli doc should avoid Nova Platform-specific naming for host-backed mounts"
+        );
+
+        let odyn_doc = read("docs/odyn.md");
+        assert!(
+            !odyn_doc.contains("/opt/nova/"),
+            "odyn docs should avoid Nova Platform-specific example paths for host-backed mounts"
+        );
+
+        let architecture_doc = read("docs/architecture.md");
+        assert!(
+            architecture_doc.contains("host-side vsock port derived from the enclave CID"),
+            "architecture docs should describe that host-side runtime ports are derived from the enclave CID"
+        );
+
+        let detailed_architecture_doc = read("docs/enclaver-architecture.md");
+        assert!(
+            detailed_architecture_doc.contains("20000 + (CID * 128) + 0"),
+            "detailed architecture docs should list the CID-derived egress port formula"
+        );
+
+        let hn_fetcher_doc = read("examples/hn-fetcher/readme.md");
+        assert!(
+            hn_fetcher_doc.contains("#odyn: \"odyn:latest\""),
+            "hn-fetcher example README should match the checked-in example manifest's odyn override comment"
+        );
+        assert!(
+            hn_fetcher_doc.contains("curl http://localhost:9001/v1/encryption/public_key"),
+            "hn-fetcher example README should document the aux API encryption public key endpoint"
+        );
+        assert!(
+            hn_fetcher_doc.contains("removing `public_key` before forwarding")
+                && hn_fetcher_doc.contains("`nonce` and `user_data` are preserved"),
+            "hn-fetcher example README should describe the current aux API attestation sanitization behavior"
         );
     }
 

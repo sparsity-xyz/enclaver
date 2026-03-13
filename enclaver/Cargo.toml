@@ -25,6 +25,7 @@ regex = "1.11"
 tokio = { version = "1.47.1", features = ["full"] }
 tokio-pipe = "0.2"
 tokio-vsock = { version = "0.4", optional = true }
+vsock-sys = { package = "vsock", version = "0.3", optional = true }
 tokio-util = { version = "0.7", features = ["codec"] }
 tokio-tar = "0.3"
 log = "0.4"
@@ -96,5 +97,5 @@ aws-credential-types = { version = "1.2.6", features = ["hardcoded-credentials"]
 run_enclave = ["proxy"]
 odyn = ["vsock", "proxy", "dep:helios", "dep:fuser", "dep:fuse_mt"]
 proxy = ["vsock"]
-vsock = ["dep:tokio-vsock", "dep:rtnetlink"]
+vsock = ["dep:tokio-vsock", "dep:rtnetlink", "dep:vsock-sys"]
 tracing = ["dep:console-subscriber", "tokio/tracing"]

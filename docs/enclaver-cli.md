@@ -52,7 +52,7 @@ Runs a pre-packaged Enclaver container image. This command simplifies the `docke
 | `-d`, `--debug-mode` | Enable debug mode for the enclave supervisor. |
 | `--cpu-count <INT>` | **(New)** Number of vCPUs to assign to the enclave. Overrides the `defaults` section in `enclaver.yaml`. |
 | `--memory-mb <INT>` | **(New)** Enclave memory in MiB. Overrides the `defaults` section in `enclaver.yaml`. |
-| `--mount <NAME=HOST_STATE_DIR>` | Prepare or reuse a loopback-image-backed host directory for a manifest-declared `storage.mounts[]` entry and expose it inside the enclave at that mount's `mount_path` through the hostfs file proxy. Reusing the same `HOST_STATE_DIR` preserves contents across runs. Requires manifest lookup via `-f` or the default `enclaver.yaml`. |
+| `--mount <NAME=HOST_STATE_DIR>` | Prepare or reuse a loopback-image-backed host directory for a manifest-declared `storage.mounts[]` entry and expose it inside the enclave at that mount's `mount_path` through the hostfs file proxy. `mount_path` must live under `/mnt/...`. Reusing the same `HOST_STATE_DIR` preserves contents across runs. Requires manifest lookup via `-f` or the default `enclaver.yaml`. |
 
 #### Parameter Priority (CPU/RAM)
 
@@ -92,5 +92,6 @@ sudo enclaver run -f enclaver.yaml --mount appdata=/var/lib/my-service/appdata
 
 - **Privileges**: Running enclaves requires `sudo` or root permissions to access `/dev/nitro_enclaves`.
 - **Docker Dependency**: `enclaver run` requires a running Docker daemon.
+- **Multiple instances on one EC2**: separate `enclaver run` processes can coexist on the same EC2 because `enclaver-run` derives host-side VSOCK listeners from an automatically managed enclave CID. Docker `-p` host ports still must not overlap.
 - **Port Model**: For full details on `ingress` vs `--publish` and the host/container/enclave mapping layers, see [Port Handling](port_handling.md).
 - **Host-backed mounts**: `--mount` provisions or reuses a dedicated loopback image under the supplied host state directory, binds it into the Sleeve container, and `odyn` mounts it inside the enclave through the hostfs file proxy before the application starts.

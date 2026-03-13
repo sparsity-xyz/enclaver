@@ -1,9 +1,11 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use http::Uri;
 use std::path::{Path, PathBuf};
 
 use enclaver::constants::{HTTP_EGRESS_PROXY_PORT, MANIFEST_FILE_NAME};
 use enclaver::manifest::{HeliosRpcKind, Manifest};
+
+const LOOPBACK_NO_PROXY: &str = "localhost,127.0.0.1";
 
 #[derive(Clone, Debug)]
 pub struct HeliosRuntimeConfig {
@@ -23,58 +25,71 @@ pub struct Configuration {
 }
 
 impl Configuration {
+    fn from_manifest(config_dir: &Path, manifest: Manifest) -> Self {
+        let listener_ports = manifest
+            .ingress
+            .as_ref()
+            .map(|ingress| ingress.iter().map(|item| item.listen_port).collect())
+            .unwrap_or_default();
+
+        Self {
+            config_dir: config_dir.to_path_buf(),
+            manifest,
+            listener_ports,
+        }
+    }
+
     pub async fn load<P: AsRef<Path>>(config_dir: P) -> Result<Self> {
         let mut manifest_path = config_dir.as_ref().to_path_buf();
         manifest_path.push(MANIFEST_FILE_NAME);
 
-        let manifest = enclaver::manifest::load_manifest(manifest_path.to_str().unwrap()).await?;
-
-        let mut listener_ports = Vec::new();
-
-        if let Some(ref ingress) = manifest.ingress {
-            for item in ingress {
-                listener_ports.push(item.listen_port);
-            }
-        }
-
-        Ok(Self {
-            config_dir: config_dir.as_ref().to_path_buf(),
-            manifest,
-            listener_ports,
-        })
+        let manifest = enclaver::manifest::load_manifest(&manifest_path).await?;
+        Ok(Self::from_manifest(config_dir.as_ref(), manifest))
     }
 
-    pub fn egress_proxy_uri(&self) -> Option<Uri> {
-        let enabled = if let Some(ref egress) = self.manifest.egress {
-            if let Some(ref allow) = egress.allow {
-                !allow.is_empty()
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+    pub fn load_blocking<P: AsRef<Path>>(config_dir: P) -> Result<Self> {
+        let mut manifest_path = config_dir.as_ref().to_path_buf();
+        manifest_path.push(MANIFEST_FILE_NAME);
 
-        if enabled {
+        let manifest = enclaver::manifest::load_manifest_sync(&manifest_path)?;
+        Ok(Self::from_manifest(config_dir.as_ref(), manifest))
+    }
+
+    pub fn egress_proxy_uri(&self) -> Result<Option<Uri>> {
+        if self.manifest.egress_proxy_enabled() {
             let port = self
                 .manifest
                 .egress
                 .as_ref()
-                .unwrap()
-                .proxy_port
+                .and_then(|egress| egress.proxy_port)
                 .unwrap_or(HTTP_EGRESS_PROXY_PORT);
 
-            Some(
-                Uri::builder()
-                    .scheme("http")
-                    .authority(format!("127.0.0.1:{port}"))
-                    .path_and_query("")
-                    .build()
-                    .unwrap(),
-            )
+            let proxy_uri = format!("http://127.0.0.1:{port}")
+                .parse::<Uri>()
+                .map_err(|err| {
+                    anyhow!("failed to build egress proxy URI for port {port}: {err}")
+                })?;
+
+            Ok(Some(proxy_uri))
         } else {
-            None
+            Ok(None)
         }
+    }
+
+    pub fn egress_proxy_env_vars(&self) -> Result<Vec<(String, String)>> {
+        let Some(proxy_uri) = self.egress_proxy_uri()? else {
+            return Ok(Vec::new());
+        };
+
+        let proxy = proxy_uri.to_string();
+        Ok(vec![
+            ("http_proxy".to_string(), proxy.clone()),
+            ("https_proxy".to_string(), proxy.clone()),
+            ("HTTP_PROXY".to_string(), proxy.clone()),
+            ("HTTPS_PROXY".to_string(), proxy),
+            ("no_proxy".to_string(), LOOPBACK_NO_PROXY.to_string()),
+            ("NO_PROXY".to_string(), LOOPBACK_NO_PROXY.to_string()),
+        ])
     }
 
     pub fn api_port(&self) -> Option<u16> {
@@ -82,15 +97,7 @@ impl Configuration {
     }
 
     pub fn aux_api_port(&self) -> Option<u16> {
-        // Aux API only runs when API service is enabled
-        let api_port = self.api_port()?;
-
-        // If aux_api.listen_port is specified, use it; otherwise default to api_port + 1
-        self.manifest
-            .aux_api
-            .as_ref()
-            .and_then(|a| a.listen_port)
-            .or_else(|| api_port.checked_add(1))
+        self.manifest.effective_aux_api_port()
     }
 
     pub fn s3_config(&self) -> Option<&enclaver::manifest::S3StorageConfig> {
@@ -141,7 +148,8 @@ impl Configuration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use enclaver::manifest::{Api, AuxApi, ClockSync, HeliosRpc, HeliosRpcChain, Sources};
+    use enclaver::constants::KMS_REGISTRY_HELIOS_PORT;
+    use enclaver::manifest::{Api, AuxApi, ClockSync, Egress, HeliosRpc, HeliosRpcChain, Sources};
 
     fn base_config() -> Configuration {
         Configuration {
@@ -161,7 +169,6 @@ mod tests {
                 defaults: None,
                 api: Some(Api { listen_port: 9000 }),
                 aux_api: None,
-                vsock_ports: None,
                 storage: None,
                 kms_integration: None,
                 helios_rpc: None,
@@ -199,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn aux_api_port_with_max_api_and_no_aux_returns_none() {
+    fn aux_api_port_with_max_api_and_no_aux_returns_none_for_invalid_manifest_shape() {
         let mut cfg = base_config();
         cfg.manifest.api = Some(Api {
             listen_port: u16::MAX,
@@ -234,7 +241,7 @@ mod tests {
                     execution_rpc: "https://sepolia.base.example".to_string(),
                     consensus_rpc: None,
                     checkpoint: None,
-                    local_rpc_port: 18545,
+                    local_rpc_port: KMS_REGISTRY_HELIOS_PORT,
                 },
                 HeliosRpcChain {
                     name: "ethereum-mainnet".to_string(),
@@ -291,6 +298,30 @@ mod tests {
             .expect("clock sync should remain enabled");
 
         assert_eq!(clock_sync.interval_secs, 42);
+    }
+
+    #[test]
+    fn egress_proxy_env_vars_returns_expected_process_env() {
+        let mut cfg = base_config();
+        cfg.manifest.egress = Some(Egress {
+            allow: Some(vec!["https://api.example.com".to_string()]),
+            deny: None,
+            proxy_port: Some(8123),
+        });
+
+        let vars = cfg.egress_proxy_env_vars().unwrap();
+
+        assert!(vars.contains(&(
+            "http_proxy".to_string(),
+            "http://127.0.0.1:8123/".to_string()
+        )));
+        assert!(vars.contains(&("NO_PROXY".to_string(), LOOPBACK_NO_PROXY.to_string())));
+    }
+
+    #[test]
+    fn egress_proxy_env_vars_is_empty_when_egress_is_disabled() {
+        let cfg = base_config();
+        assert!(cfg.egress_proxy_env_vars().unwrap().is_empty());
     }
 
     #[test]

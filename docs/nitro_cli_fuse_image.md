@@ -6,10 +6,10 @@ enable FUSE, and how the rebuilt blobs are swapped into the final image.
 
 ## Why We Do This
 
-Enclaver supports host-backed directory mounts inside the enclave. This is the
-same capability Nova Platform describes as a Host-Backed Temporary Directory
-Mount. In Enclaver, the same mechanism can be temporary or persistent depending
-on whether you reuse the bound host state directory across runs.
+Enclaver supports host-backed directory mounts inside the enclave. The same
+hostfs-backed mechanism can behave like a host-backed temporary directory or a
+persistent directory depending on whether you reuse the bound host state
+directory across runs.
 
 That flow depends on FUSE being available inside the EIF kernel so `odyn` can
 mount host-backed storage through `/dev/fuse`.

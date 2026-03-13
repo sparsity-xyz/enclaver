@@ -8,7 +8,7 @@ use tokio::task::JoinHandle;
 use tokio_vsock::VsockStream;
 
 use crate::config::Configuration;
-use enclaver::constants::CLOCK_SYNC_PORT;
+use enclaver::runtime_vsock::RuntimeHostVsockPorts;
 use enclaver::vsock::VMADDR_CID_HOST;
 
 const INITIAL_SYNC_MAX_ATTEMPTS: usize = 10;
@@ -26,13 +26,14 @@ pub struct ClockSyncService {
 }
 
 impl ClockSyncService {
-    pub fn start(config: &Configuration) -> Self {
+    pub fn start(config: &Configuration, runtime_vsock: &RuntimeHostVsockPorts) -> Self {
         let Some(cs_config) = config.clock_sync_config() else {
             info!("Clock sync disabled in manifest");
             return Self { task: None };
         };
 
         let interval_secs = cs_config.interval_secs;
+        let host_clock_sync_port = runtime_vsock.clock_sync_port;
         info!("Starting clock sync service (interval: {}s)", interval_secs);
 
         // Do an initial sync immediately, then periodically
@@ -40,7 +41,7 @@ impl ClockSyncService {
             // Initial sync with retries
             let mut retries = 0;
             loop {
-                match sync_once().await {
+                match sync_once(host_clock_sync_port).await {
                     Ok(()) => break,
                     Err(e) => {
                         retries += 1;
@@ -61,7 +62,7 @@ impl ClockSyncService {
             interval.tick().await; // consume the immediate first tick
             loop {
                 interval.tick().await;
-                if let Err(e) = sync_once().await {
+                if let Err(e) = sync_once(host_clock_sync_port).await {
                     error!("Clock sync failed: {e}");
                 }
             }
@@ -79,10 +80,10 @@ impl ClockSyncService {
 }
 
 /// Perform a single clock synchronization: connect to host, get time, set clock.
-async fn sync_once() -> Result<()> {
+async fn sync_once(host_clock_sync_port: u32) -> Result<()> {
     let mut stream = tokio::time::timeout(
         CLOCK_SYNC_CONNECT_TIMEOUT,
-        VsockStream::connect(VMADDR_CID_HOST, CLOCK_SYNC_PORT),
+        VsockStream::connect(VMADDR_CID_HOST, host_clock_sync_port),
     )
     .await
     .map_err(|_| anyhow!("timed out connecting to host time server"))??;

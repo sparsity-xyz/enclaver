@@ -56,6 +56,8 @@ The codebase has three execution domains:
   - resolves `--mount` runtime bindings against `storage.mounts[]`
   - creates or reuses fixed-size loopback images
   - mounts them on the parent instance and exposes bind mounts to Sleeve
+  - stores per-mount runtime metadata under `<host_state_dir>/.enclaver-hostfs/`
+  - key paths are `disk.img`, `lock`, and transient `mnt-<uuid>/data`
 
 - `enclaver/src/run.rs`
   - runtime orchestrator inside the Sleeve container
@@ -86,7 +88,7 @@ The codebase has three execution domains:
 
 - `enclaver/src/bin/odyn/config.rs`
   - runtime configuration helpers
-  - important detail: if `api` is enabled, Aux API also starts by default on `api.listen_port + 1`
+  - important detail: if `api` is enabled, Aux API is required for attestation and defaults to `api.listen_port + 1`
 
 - `enclaver/src/bin/odyn/enclave.rs`
   - loopback setup and RNG seeding from NSM
@@ -236,10 +238,13 @@ original app image
 
 - status VSOCK port: `17000`
 - app log VSOCK port: `17001`
-- egress VSOCK port: `17002`
-- clock-sync VSOCK port: `17003`
-- hostfs VSOCK port range: `17100-17199`
+- host-side egress VSOCK port: `20000 + (CID * 128) + 0`
+- host-side clock-sync VSOCK port: `20000 + (CID * 128) + 1`
+- host-side hostfs VSOCK port for mount index `N`: `20000 + (CID * 128) + 16 + N`
 - default enclave egress proxy port: `10000`
+
+`enclaver-run` manages the enclave CID automatically when it launches the EIF,
+so separate Enclaver instances on one EC2 get different host-side VSOCK blocks.
 
 ## Related documents
 

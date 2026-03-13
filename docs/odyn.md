@@ -293,9 +293,29 @@ storage:
 
 **How it works**:
 - `enclaver run --mount <name>=<host_state_dir>` prepares or reuses a fixed-size loopback image on the host
-- `enclaver-run` exposes that filesystem through a hostfs file proxy on a dedicated vsock port
-- Odyn mounts a FUSE filesystem at the configured `mount_path` before your app starts
+- `enclaver-run` exposes that filesystem through a hostfs file proxy on a host-side VSOCK port derived from the enclave CID and mount order
+- Odyn mounts a FUSE filesystem at the configured `mount_path` before your app starts. `mount_path` must live under `/mnt/...`
 - Your application uses ordinary file APIs against that mount path
+
+**Actual host layout**:
+- `<host_state_dir>` is the per-mount state directory you bind at runtime
+- Enclaver stores its hostfs metadata under `<host_state_dir>/.enclaver-hostfs/`
+- The durable backing image is `<host_state_dir>/.enclaver-hostfs/disk.img`
+- The runtime lock file is `<host_state_dir>/.enclaver-hostfs/lock`
+- The transient host mountpoint is created as `<host_state_dir>/.enclaver-hostfs/mnt-<uuid>/data`
+
+Example:
+```text
+/var/lib/my-service/appdata/
+`- .enclaver-hostfs/
+   |- disk.img
+   |- lock
+   `- mnt-<uuid>/
+      `- data/
+```
+
+The extra `.enclaver-hostfs/` layer is intentional: it keeps Enclaver runtime
+metadata separate from the application-visible host state directory.
 
 **Configuration**:
 ```yaml
@@ -367,7 +387,7 @@ clock_sync:
 api:
   listen_port: 18000
 
-# Aux API port override (the service also starts by default when API is enabled)
+# Aux API port override (the service is required whenever API is enabled)
 aux_api:
   listen_port: 18001
 
@@ -413,7 +433,7 @@ storage:
 | **Egress** | `egress.proxy_port` | Make outbound HTTP requests | Automatic via `http_proxy` env var |
 | **Clock Sync** | `clock_sync.interval_secs` / `clock_sync.enabled` | Keep enclave wall clock aligned with host time | Automatic; no app changes |
 | **Internal API** | `api.listen_port` | Attestation, signing, encryption, KMS/app-wallet, storage | HTTP to `http://127.0.0.1:<port>` |
-| **Aux API** | `aux_api.listen_port` | Restricted API for sidecars; defaults to `api_port + 1` | HTTP to `http://127.0.0.1:<port>` |
+| **Aux API** | `aux_api.listen_port` | Restricted API for sidecars and attestation; defaults to `api_port + 1` | HTTP to `http://127.0.0.1:<port>` |
 | **Storage** | `storage.s3.*` | Persistent S3 storage exposed via the Internal API | HTTP to `/v1/s3/...` |
 | **Helios RPC** | `helios_rpc.chains[].local_rpc_port` | Trustless multi-chain RPC | HTTP to `http://127.0.0.1:<chain_port>` |
 | **Console** | N/A (automatic) | Log streaming | Print to stdout/stderr |

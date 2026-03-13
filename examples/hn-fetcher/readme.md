@@ -40,7 +40,7 @@ name: "hn-fetcher"
 target: "hn-fetcher-enclave:latest"
 sources:
   app: "hn-fetcher:latest"
-  #odyn: "odyn-dev:latest"
+  #odyn: "odyn:latest"
   #sleeve: "sleeve:latest"
 defaults:
   memory_mb: 1500
@@ -158,6 +158,22 @@ Example response:
 }
 ```
 
+#### Get Encryption Public Key
+
+Retrieve the enclave's P-384 encryption public key:
+
+```bash
+curl http://localhost:9001/v1/encryption/public_key
+```
+
+Example response:
+```json
+{
+  "public_key_der": "0x3076...",
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+}
+```
+
 #### Request Attestation
 
 Request an attestation document from the enclave. You can optionally provide a nonce for freshness:
@@ -182,7 +198,7 @@ Example response:
 }
 ```
 
-**Security Note:** The aux API automatically sanitizes incoming requests by removing `public_key` and `user_data` fields to prevent external callers from overriding the enclave's internal defaults. This ensures that the attestation document always contains the enclave's authentic keypair and metadata.
+**Security Note:** The aux API automatically sanitizes incoming attestation requests by removing `public_key` before forwarding them to the internal API. `nonce` and `user_data` are preserved, so external callers cannot override the enclave's default attestation key while still being able to provide freshness and caller-specific metadata.
 
 ## Check aws nitro enclave info
 

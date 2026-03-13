@@ -21,6 +21,7 @@ pub mod http_client;
 pub mod keypair;
 pub mod policy;
 pub mod run_container;
+pub mod runtime_vsock;
 
 #[cfg(feature = "run_enclave")]
 pub mod run;

@@ -4,12 +4,28 @@ use anyhow::{Result, anyhow};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 use std::process::Stdio;
-use tokio::process::{ChildStdout, Command};
+use tokio::process::{Child, ChildStdout, Command};
 
 pub struct NitroCLI {
     program: String,
+}
+
+pub struct AttachedConsole {
+    child: Child,
+}
+
+impl AttachedConsole {
+    pub fn into_parts(mut self) -> Result<(Child, ChildStdout)> {
+        let stdout =
+            self.child.stdout.take().ok_or_else(|| {
+                anyhow!("invariant violated: nitro-cli console stdout was not piped")
+            })?;
+        Ok((self.child, stdout))
+    }
 }
 
 impl NitroCLI {
@@ -19,11 +35,23 @@ impl NitroCLI {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_program(program: impl Into<String>) -> Self {
+        Self {
+            program: program.into(),
+        }
+    }
+
     pub async fn run_and_deserialize_output<T>(&self, args: impl NitroCLIArgs) -> Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
         let cmd_args = args.to_args()?;
+        let rendered_cmd = cmd_args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
 
         debug!("executing nitro-cli with args: {:#?}", cmd_args);
 
@@ -42,7 +70,6 @@ impl NitroCLI {
             error!("nitro-cli failed ({})", output.status);
 
             let stderr = String::from_utf8(output.stderr)?;
-            error!("stderr:\n{}", stderr);
 
             for path in stderr.lines().filter_map(|line| {
                 line.strip_prefix(
@@ -54,7 +81,7 @@ impl NitroCLI {
                 error!("{path}:\n{contents}");
             }
 
-            Err(anyhow!("failed to run enclave"))
+            Err(NitroCliCommandFailure::new(rendered_cmd, output.status, stderr).into())
         }
     }
 
@@ -87,7 +114,7 @@ impl NitroCLI {
         .await
     }
 
-    pub async fn console(&self, enclave_id: &str) -> Result<ChildStdout> {
+    pub async fn console(&self, enclave_id: &str) -> Result<AttachedConsole> {
         let cmd_args = AttachConsoleArgs {
             enclave_id: enclave_id.to_string(),
         }
@@ -102,7 +129,7 @@ impl NitroCLI {
             .spawn()
             .map_err(|err| anyhow!("failed to execute nitro-cli: {err}"))?;
 
-        Ok(child.stdout.unwrap())
+        Ok(AttachedConsole { child })
     }
 }
 
@@ -211,6 +238,61 @@ impl NitroCLIArgs for DescribeEnclavesArgs {
     }
 }
 
+#[derive(Debug)]
+pub struct NitroCliCommandFailure {
+    command: String,
+    status: ExitStatus,
+    stderr: String,
+}
+
+impl NitroCliCommandFailure {
+    pub(crate) fn new(command: String, status: ExitStatus, stderr: String) -> Self {
+        Self {
+            command,
+            status,
+            stderr,
+        }
+    }
+
+    pub fn indicates_cid_conflict(&self) -> bool {
+        stderr_mentions_cid_conflict(&self.stderr)
+    }
+}
+
+impl fmt::Display for NitroCliCommandFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let stderr = self.stderr.trim();
+        if stderr.is_empty() {
+            write!(
+                f,
+                "nitro-cli command '{}' failed ({})",
+                self.command, self.status
+            )
+        } else {
+            write!(
+                f,
+                "nitro-cli command '{}' failed ({}): {}",
+                self.command, self.status, stderr
+            )
+        }
+    }
+}
+
+impl std::error::Error for NitroCliCommandFailure {}
+
+fn stderr_mentions_cid_conflict(stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    stderr.contains("cid")
+        && [
+            "already in use",
+            "already used",
+            "used by another enclave",
+            "in use by another enclave",
+        ]
+        .iter()
+        .any(|needle| stderr.contains(needle))
+}
+
 pub struct TerminateEnclaveArgs {
     pub enclave_id: String,
 }
@@ -293,6 +375,7 @@ old images in your local Docker engine."#
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::ExitStatusExt;
 
     #[test]
     fn test_detect_known_issues() {
@@ -308,6 +391,33 @@ mod tests {
                 r#"Linuxkit reported an error while creating the customer ramfs: "Add init containers:\nProcess init image: docker.io/library/79ac5a4b-6e92-4e83-a351-ebdb2ff97d18\nAdd files:\n  rootfs/dev\n  rootfs/run\n  rootfs/sys\n  rootfs/var\n  rootfs/proc\n  rootfs/tmp\n  cmd\n  env\nCreate outputs:\n""#
             ),
             Some(KnownIssue::ImageTooLargeForRAM)
+        );
+    }
+
+    #[test]
+    fn test_detect_cid_conflict_stderr() {
+        assert!(stderr_mentions_cid_conflict(
+            "Enclave CID 19 is already in use by another enclave"
+        ));
+        assert!(stderr_mentions_cid_conflict(
+            "allocator error: CID 22 already used"
+        ));
+        assert!(!stderr_mentions_cid_conflict(
+            "failed to allocate memory for enclave"
+        ));
+    }
+
+    #[test]
+    fn test_command_failure_display_includes_stderr() {
+        let err = NitroCliCommandFailure::new(
+            "run-enclave".to_string(),
+            ExitStatus::from_raw(1 << 8),
+            "allocator error: CID 22 already used".to_string(),
+        );
+
+        assert!(
+            err.to_string()
+                .contains("allocator error: CID 22 already used")
         );
     }
 }
