@@ -765,7 +765,7 @@ mod tests {
             "base image docs should state that Sleeve publishing is currently linux/amd64 only"
         );
 
-        let image_build_doc = read("docs/building_images.md");
+        let image_build_doc = read("docs/building_images_guidance.md");
         assert!(
             image_build_doc.contains("The helper is currently `x86_64`-only"),
             "image build docs should explain that the default local sleeve helper currently requires x86_64"

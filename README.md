@@ -55,7 +55,7 @@ Core feature docs are linked from [Enclaver Highlights](#enclaver-highlights). A
 
 - [enclaver.yaml Reference](docs/enclaver.yaml) — Complete manifest configuration with parameter usage annotations
 - [Base Images](docs/base-images.md) — What the odyn / sleeve base images contain and how to inspect them
-- [Building Images](docs/building_images.md) — Local build flow for odyn, sleeve, and nitro-cli images
+- [Building Images](docs/building_images_guidance.md) — Local build flow for odyn, sleeve, and nitro-cli images
 - [VSOCK Runtime Model](docs/vsock_runtime.md) — How CID-derived VSOCK ports work, including multiple Enclaver instances on one EC2
 - [Nitro CLI FUSE Image](docs/nitro_cli_fuse_image.md) — Why and how the Nitro CLI image rebuilds enclave blobs with FUSE enabled
 - [CI and Release Workflows](docs/ci.md) — How repository CI and release pipelines are structured
