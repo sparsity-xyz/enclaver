@@ -154,3 +154,47 @@ jobs:
           else
             cargo test --quiet --manifest-path enclaver/Cargo.toml --features="${{ matrix.features }}"
           fi
+
+  enclaver-build-smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Parse MSRV
+        run: sed -n 's/^rust-version = "\(.*\)"$/RUSTUP_TOOLCHAIN=\1/p' enclaver/Cargo.toml >> $GITHUB_ENV
+
+      - name: Install Rust Toolchain
+        run: rustup toolchain install $RUSTUP_TOOLCHAIN
+
+      - name: Cache Cargo registry and git data
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: ${{ runner.os }}-cargo-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUSTUP_TOOLCHAIN }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Cache Rust target directory
+        uses: actions/cache@v5
+        with:
+          path: enclaver/target
+          key: ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-smoke-${{ hashFiles('enclaver/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-smoke-
+            ${{ runner.os }}-target-${{ env.RUSTUP_TOOLCHAIN }}-
+
+      - name: Build enclaver CLI
+        run: cargo build --quiet --manifest-path enclaver/Cargo.toml --bin enclaver
+
+      - name: Smoke test enclaver build
+        env:
+          ENCLAVER_BIN: ${{ github.workspace }}/enclaver/target/debug/enclaver
+        run: ./scripts/enclaver-build-smoke-test.sh
