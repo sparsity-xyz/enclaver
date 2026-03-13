@@ -456,6 +456,9 @@ impl Enclave {
 
     async fn await_exit(cid: u32, status_port: u32) -> Result<EnclaveExitStatus> {
         let mut failed_attempts = 0;
+        // Once the status channel has been established, we keep reconnecting on
+        // unexpected disconnects until the caller cancels `run()` or we exceed
+        // the connect retry budget below.
         let mut reconnects_after_disconnect = 0u32;
 
         loop {
@@ -474,6 +477,10 @@ impl Enclave {
                 }
             };
 
+            // Keep the total connect-failure budget across the entire wait
+            // loop. If the status port repeatedly drops and later reconnects,
+            // we still want to fail after enough consecutive connect failures
+            // rather than silently waiting forever.
             if reconnects_after_disconnect > 0 {
                 warn!(
                     "reconnected to enclave status port after {} unexpected disconnect(s)",
@@ -824,6 +831,11 @@ mod tests {
 
     struct FlagOnDrop(Arc<AtomicBool>);
 
+    struct MockNitroCli {
+        _dir: tempfile::TempDir,
+        path: PathBuf,
+    }
+
     impl Drop for FlagOnDrop {
         fn drop(&mut self) {
             self.0.store(true, Ordering::SeqCst);
@@ -853,7 +865,7 @@ mod tests {
         }
     }
 
-    fn write_mock_nitro_cli() -> std::path::PathBuf {
+    fn write_mock_nitro_cli() -> MockNitroCli {
         let dir = tempdir().expect("create tempdir");
         let script_path = dir.path().join("nitro-cli");
         fs::write(
@@ -873,9 +885,10 @@ exit 1
             .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&script_path, perms).expect("chmod mock nitro-cli");
-        let path = script_path.clone();
-        std::mem::forget(dir);
-        path
+        MockNitroCli {
+            _dir: dir,
+            path: script_path,
+        }
     }
 
     #[test]
@@ -1009,6 +1022,7 @@ exit 1
         let ingress_conflict =
             std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve ingress port");
         let ingress_port = ingress_conflict.local_addr().expect("ingress addr").port();
+        let mock_nitro_cli = write_mock_nitro_cli();
 
         let enclave_info = EnclaveInfo {
             name: "test".to_string(),
@@ -1022,7 +1036,7 @@ exit 1
         }]);
 
         let mut enclave = Enclave {
-            cli: NitroCLI::with_program(write_mock_nitro_cli().display().to_string()),
+            cli: NitroCLI::with_program(mock_nitro_cli.path.display().to_string()),
             eif_path: PathBuf::from("/tmp/test.eif"),
             manifest,
             cpu_count: 2,

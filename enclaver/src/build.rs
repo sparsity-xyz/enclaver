@@ -706,13 +706,11 @@ mod tests {
             "README should summarize Enclaver's core capabilities in a dedicated highlights section"
         );
         assert!(
-            readme.contains(
-                "[Host-Backed Directory Mounts Guide](docs/host_backed_mounts_design.md)"
-            ),
+            readme.contains("[Host-Backed Directory Mounts Guide](docs/host_backed_mounts.md)"),
             "README should point readers to the dedicated host-backed mounts guide instead of inlining the feature details"
         );
 
-        let hostfs_doc = read("docs/host_backed_mounts_design.md");
+        let hostfs_doc = read("docs/host_backed_mounts.md");
         assert!(
             hostfs_doc.to_ascii_lowercase().contains("host-backed")
                 && hostfs_doc
@@ -767,7 +765,7 @@ mod tests {
             "base image docs should state that Sleeve publishing is currently linux/amd64 only"
         );
 
-        let image_build_doc = read("docs/BUILDING_IMAGES.md");
+        let image_build_doc = read("docs/building_images.md");
         assert!(
             image_build_doc.contains("The helper is currently `x86_64`-only"),
             "image build docs should explain that the default local sleeve helper currently requires x86_64"

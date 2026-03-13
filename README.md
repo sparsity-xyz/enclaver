@@ -11,7 +11,7 @@ This is the **Sparsity edition** of Enclaver. It significantly extends the origi
 
 - **Secure Internal API**: Gives enclave apps built-in APIs for attestation, randomness, signing, encryption, and storage operations, so application code can call localhost HTTP endpoints instead of integrating the AWS NSM SDK directly. See [Internal API Reference](docs/internal_api.md) and [Internal API Mock Service](docs/internal_api_mockup.md).
 - **Ingress and egress control**: Routes inbound traffic into the enclave and outbound HTTP/HTTPS traffic through explicit proxy and policy layers. See [Enclaver CLI Reference](docs/enclaver-cli.md), [Port Handling](docs/port_handling.md), and [HTTP(S) Proxy Support Guidance](docs/http_proxy_support_guidance_for_enclave_applications.md).
-- **Host-backed storage**: Exposes host-backed directory mounts inside the enclave as normal filesystem paths for application code. See [Host-Backed Directory Mounts Guide](docs/host_backed_mounts_design.md).
+- **Host-backed storage**: Exposes host-backed directory mounts inside the enclave as normal filesystem paths for application code. See [Host-Backed Directory Mounts Guide](docs/host_backed_mounts.md).
 - **Runtime supervision**: Starts the app, streams logs, reports exit status, and keeps the enclave wall clock synchronized with the host. See [Odyn User Guide](docs/odyn.md), [Odyn Implementation Details](docs/odyn_details.md), and [Clock Drift & Time Sync](docs/nitro_enclave_clock_drift.md).
 - **Ethereum signing**: Adds secp256k1-based signing flows for enclave applications and internal APIs. See [Internal API Reference](docs/internal_api.md).
 - **Trustless Helios RPC**: Runs Helios light-client RPC inside the enclave for Ethereum and OP Stack workloads. See [Helios RPC Integration](docs/helios_rpc.md).
@@ -55,7 +55,7 @@ Core feature docs are linked from [Enclaver Highlights](#enclaver-highlights). A
 
 - [enclaver.yaml Reference](docs/enclaver.yaml) — Complete manifest configuration with parameter usage annotations
 - [Base Images](docs/base-images.md) — What the odyn / sleeve base images contain and how to inspect them
-- [Building Images](docs/BUILDING_IMAGES.md) — Local build flow for odyn, sleeve, and nitro-cli images
+- [Building Images](docs/building_images.md) — Local build flow for odyn, sleeve, and nitro-cli images
 - [VSOCK Runtime Model](docs/vsock_runtime.md) — How CID-derived VSOCK ports work, including multiple Enclaver instances on one EC2
 - [Nitro CLI FUSE Image](docs/nitro_cli_fuse_image.md) — Why and how the Nitro CLI image rebuilds enclave blobs with FUSE enabled
 - [CI and Release Workflows](docs/ci.md) — How repository CI and release pipelines are structured
