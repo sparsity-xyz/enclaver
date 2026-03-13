@@ -133,7 +133,8 @@ Notably:
 
 - `nitro-cli.yaml` is the manual workflow for publishing just the Nitro CLI image
 - the Nitro CLI publish path is currently `linux/amd64` only
-- only `nitro-cli.yaml` validates that the nitro-cli image ships a FUSE-enabled enclave kernel and can complete a smoke `build-enclave` before push
+- `nitro-cli.yaml` validates that the nitro-cli image ships a FUSE-enabled enclave kernel and can complete a smoke `build-enclave` before push
+- `ci.yaml` also runs `ENCLAVER_SMOKE_MODE=fixture ./scripts/enclaver-build-smoke-test.sh` to validate that `enclaver build` completes the `--docker-dir` EIF handoff and release-image packaging path on Linux without depending on public-registry pulls during every CI run
 - the release workflow still does not upload `odyn` or `enclaver-run` as standalone GitHub Release tarballs
 
 ## Local release reproduction

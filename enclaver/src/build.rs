@@ -15,7 +15,8 @@ use log::{debug, info, warn};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::fs::{canonicalize, rename};
+use tokio::fs::{File, canonicalize, create_dir_all, rename};
+use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 const ENCLAVE_OVERLAY_CHOWN: &str = "0:0";
 const RELEASE_OVERLAY_CHOWN: &str = "0:0";
@@ -252,6 +253,24 @@ impl EnclaveArtifactBuilder {
         Ok(packaged_img)
     }
 
+    async fn write_nitro_cli_docker_context(
+        build_dir: &TempDir,
+        source_image_ref: &str,
+    ) -> Result<PathBuf> {
+        let docker_context_dir = build_dir.path().join("docker-context");
+        create_dir_all(&docker_context_dir).await?;
+
+        let dockerfile_path = docker_context_dir.join("Dockerfile");
+        let mut dockerfile = File::create(&dockerfile_path).await?;
+        dockerfile
+            .write_all(format!("FROM {source_image_ref}\n").as_bytes())
+            .await?;
+        dockerfile.flush().await?;
+        dockerfile.shutdown().await?;
+
+        Ok(docker_context_dir)
+    }
+
     /// Convert the referenced image to an EIF file, which will be deposited into `build_dir`
     /// using the file name `eif_name`.
     ///
@@ -267,17 +286,34 @@ impl EnclaveArtifactBuilder {
     ) -> Result<EIFInfo> {
         let build_dir_path = build_dir.path().to_str().unwrap();
 
-        // There is currently no way to point nitro-cli to a local image ID; it insists
-        // on attempting to pull the image (this may be a bug;. As a workaround, give our image a random
-        // tag, and pass that.
-        let img_tag = Uuid::new_v4().to_string();
-        self.image_manager.tag_image(source_img, &img_tag).await?;
+        // nitro-cli build-enclave can build from a Dockerfile directory. Tag the amended
+        // image locally once, then build a tiny Docker context that simply FROMs that
+        // local tag so Nitro CLI stays on the local-daemon path instead of probing
+        // remote registries for a temporary image name.
+        let source_tag = format!("enclaver-intermediate-{}", Uuid::new_v4());
+        let source_image_ref = format!("{source_tag}:latest");
+        self.image_manager
+            .tag_image(source_img, &source_tag)
+            .await?;
 
-        debug!("tagged intermediate image: {}", img_tag);
+        let docker_context_dir =
+            Self::write_nitro_cli_docker_context(build_dir, &source_image_ref).await?;
+        debug!(
+            "tagged intermediate image: {} and wrote docker context: {}",
+            source_image_ref,
+            docker_context_dir.to_string_lossy()
+        );
 
         let nitro_cli = NitroCLIContainer::new(self.docker.clone(), nitro_cli_img);
+        let docker_uri = format!("enclaver-eif-build-{}:latest", Uuid::new_v4());
         let build_container_id = nitro_cli
-            .build_enclave(eif_name, &img_tag, build_dir_path, sign)
+            .build_enclave(
+                eif_name,
+                &docker_uri,
+                "/build/docker-context",
+                build_dir_path,
+                sign,
+            )
             .await?;
 
         info!(
@@ -307,24 +343,34 @@ impl EnclaveArtifactBuilder {
             );
         }
 
+        let mut json_buf = Vec::with_capacity(4096);
         let status_code = nitro_cli.wait_container(&build_container_id).await?;
+
+        if status_code == 0 {
+            let mut stdout_stream = nitro_cli.stdout(&build_container_id, false);
+
+            while let Some(line) = stdout_stream.next().await {
+                json_buf.extend_from_slice(line.as_ref());
+            }
+        }
+
+        // Always attempt cleanup, even when nitro-cli exits non-zero, so repeated
+        // builds do not accumulate temporary container/image state in the daemon.
+        let remove_container_result = nitro_cli.remove_container(&build_container_id).await;
+        let _ = self
+            .docker
+            .remove_image(&docker_uri, None::<RemoveImageOptions>, None)
+            .await;
+        let _ = self
+            .docker
+            .remove_image(&source_image_ref, None::<RemoveImageOptions>, None)
+            .await;
+
+        remove_container_result?;
+
         if status_code != 0 {
             return Err(anyhow!("non-zero exit code from nitro-cli",));
         }
-
-        let mut json_buf = Vec::with_capacity(4096);
-        let mut stdout_stream = nitro_cli.stdout(&build_container_id, false);
-
-        while let Some(line) = stdout_stream.next().await {
-            json_buf.extend_from_slice(line.as_ref());
-        }
-
-        // If we make it this far, do a little bit of cleanup
-        nitro_cli.remove_container(&build_container_id).await?;
-        let _ = self
-            .docker
-            .remove_image(&img_tag, None::<RemoveImageOptions>, None)
-            .await?;
 
         Ok(serde_json::from_slice(&json_buf)?)
     }
@@ -359,18 +405,27 @@ impl EnclaveArtifactBuilder {
         name_override: Option<&str>,
         default: &str,
     ) -> Result<ImageRef> {
-        match name_override {
-            Some(image_name) => {
-                let mut img = self.image_manager.find_or_pull(image_name).await?;
-                img.name = Some(image_name.to_string());
-                Ok(img)
-            }
+        // Internal runtime images now follow the same local-first behavior as app
+        // images unless the user explicitly asks for --pull. This keeps default
+        // builds reproducible against preloaded images, while preserving an escape
+        // hatch for callers that want to refresh latest-tag defaults.
+        let (image_name, mut img) = match name_override {
+            Some(image_name) => (
+                image_name,
+                self.image_manager.find_or_pull(image_name).await?,
+            ),
             None => {
-                let mut img = self.image_manager.pull_image(default).await?;
-                img.name = Some(default.to_string());
-                Ok(img)
+                let img = if self.pull_tags {
+                    self.image_manager.pull_image(default).await?
+                } else {
+                    self.image_manager.find_or_pull(default).await?
+                };
+                (default, img)
             }
-        }
+        };
+
+        img.name = Some(image_name.to_string());
+        Ok(img)
     }
 
     async fn resolve_sources(&self, manifest: &Manifest) -> Result<ResolvedSources> {
@@ -440,9 +495,10 @@ mod tests {
     // Intentionally strict: these tests treat selected docs/workflows/scripts
     // as part of the product contract, so CI fails fast when code and
     // user-facing operational guidance drift apart.
-    use super::NITRO_CLI_IMAGE;
+    use super::{EnclaveArtifactBuilder, NITRO_CLI_IMAGE};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
 
     fn nitro_cli_image_repo() -> String {
         NITRO_CLI_IMAGE
@@ -557,6 +613,60 @@ mod tests {
     }
 
     #[test]
+    fn enclaver_build_smoke_script_exercises_docker_dir_path() {
+        let path = repo_root().join("scripts/enclaver-build-smoke-test.sh");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            contents.contains("\"${ENCLAVER_BIN}\" -v build -f"),
+            "smoke test should execute enclaver build through the CLI entrypoint"
+        );
+        assert!(
+            contents.contains("wrote docker context"),
+            "smoke test should assert that enclaver used the docker-dir Nitro CLI path"
+        );
+        assert!(
+            contents.contains("ENCLAVER_SMOKE_MODE")
+                && contents.contains("Preparing local fixture images for smoke mode"),
+            "smoke test should support a fixture mode for rate-limit-resistant CI coverage"
+        );
+        assert!(
+            contents.contains("uuidgen")
+                || contents.contains("openssl rand -hex")
+                || contents.contains("printf '%s-%s'"),
+            "smoke test should use a high-entropy tag suffix strategy with a safe fallback"
+        );
+        assert!(
+            contents.contains("no manifest")
+                && contents.contains("overwrite any pre-existing local copy"),
+            "smoke test should document why fixture mode temporarily reuses the published nitro-cli tag"
+        );
+        assert!(
+            contents.contains("/enclave/application.eif")
+                && contents.contains("/enclave/enclaver.yaml"),
+            "smoke test should verify the release image contains the packaged EIF bundle"
+        );
+    }
+
+    #[tokio::test]
+    async fn nitro_cli_docker_dir_context_uses_local_tag_reference() {
+        let build_dir = TempDir::new().expect("temp dir should be created");
+        let docker_context_dir = EnclaveArtifactBuilder::write_nitro_cli_docker_context(
+            &build_dir,
+            "enclaver-intermediate-test:latest",
+        )
+        .await
+        .expect("docker context should be created");
+
+        let dockerfile_path = docker_context_dir.join("Dockerfile");
+        let contents = fs::read_to_string(&dockerfile_path)
+            .unwrap_or_else(|err| panic!("reading {dockerfile_path:?}: {err}"));
+
+        assert_eq!(contents, "FROM enclaver-intermediate-test:latest\n");
+    }
+
+    #[test]
     fn nitro_cli_workflow_publishes_and_validates_self_hosted_image() {
         let path = repo_root().join(".github/workflows/nitro-cli.yaml");
         let contents =
@@ -585,6 +695,30 @@ mod tests {
         assert!(
             contents.contains("cache-to: type=gha,mode=max,scope=nitro-cli-amd64"),
             "nitro-cli workflow should export the nitro-cli build cache between validation and push"
+        );
+    }
+
+    #[test]
+    fn ci_workflow_runs_enclaver_build_smoke_test() {
+        let path = repo_root().join(".github/workflows/ci.yaml");
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {path:?}: {err}"));
+
+        assert!(
+            contents.contains("Smoke test enclaver build"),
+            "CI workflow should include the end-to-end enclaver build smoke test job step"
+        );
+        assert!(
+            contents.contains("ENCLAVER_SMOKE_MODE: fixture"),
+            "CI workflow should run the smoke test in fixture mode to avoid registry rate limits"
+        );
+        assert!(
+            contents.contains("timeout-minutes: 15"),
+            "CI workflow should time out the smoke job instead of relying on the platform default"
+        );
+        assert!(
+            contents.contains("./scripts/enclaver-build-smoke-test.sh"),
+            "CI workflow should execute the enclaver build smoke test script"
         );
     }
 
@@ -782,6 +916,14 @@ mod tests {
                 && image_build_doc.contains("-t sleeve:local ."),
             "image build docs should show sleeve release builds as linux/amd64 only"
         );
+        assert!(
+            image_build_doc.contains("scripts/enclaver-build-smoke-test.sh"),
+            "image build docs should document the enclaver build smoke test helper"
+        );
+        assert!(
+            image_build_doc.contains("ENCLAVER_SMOKE_MODE=fixture"),
+            "image build docs should document the fixture-based smoke test mode"
+        );
 
         let ci_doc = read("docs/ci.md");
         assert!(
@@ -791,6 +933,11 @@ mod tests {
         assert!(
             ci_doc.contains("packages only the `x86_64` `enclaver` binary into a release tarball"),
             "CI docs should describe the x86_64-only release artifact packaging"
+        );
+        assert!(
+            ci_doc.contains("ENCLAVER_SMOKE_MODE=fixture")
+                && ci_doc.contains("scripts/enclaver-build-smoke-test.sh"),
+            "CI docs should describe the enclaver build smoke test helper"
         );
 
         let nitro_cli_doc = read("docs/nitro_cli_fuse_image.md");

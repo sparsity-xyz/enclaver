@@ -33,7 +33,8 @@ impl NitroCLIContainer {
     pub async fn build_enclave(
         &self,
         eif_name: &str,
-        img_tag: &str,
+        docker_uri: &str,
+        docker_dir: &str,
         build_dir_path: &str,
         sign: Option<SigningInfo>,
     ) -> Result<String> {
@@ -42,7 +43,9 @@ impl NitroCLIContainer {
         let mut cmd = vec![
             "build-enclave",
             "--docker-uri",
-            img_tag,
+            docker_uri,
+            "--docker-dir",
+            docker_dir,
             "--output-file",
             eif_name,
         ];
