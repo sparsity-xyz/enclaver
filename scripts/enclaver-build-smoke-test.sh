@@ -2,15 +2,30 @@
 
 set -euo pipefail
 
+unique_suffix() {
+    if command -v uuidgen >/dev/null 2>&1; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 8
+    else
+        printf '%s-%s' "${RANDOM}" "$$"
+    fi
+}
+
+TAG_SUFFIX="$(unique_suffix)"
 TMP_DIR="$(mktemp -d)"
 APP_DIR="${TMP_DIR}/app"
 MANIFEST_PATH="${TMP_DIR}/enclaver.yaml"
 BUILD_STDOUT="${TMP_DIR}/build-summary.json"
 BUILD_STDERR="${TMP_DIR}/build.log"
-APP_IMAGE_TAG="enclaver-build-smoke-app:${RANDOM}-$$"
-RELEASE_IMAGE_TAG="enclaver-build-smoke-release:${RANDOM}-$$"
-ODYN_IMAGE_TAG="enclaver-build-smoke-odyn:${RANDOM}-$$"
-SLEEVE_IMAGE_TAG="enclaver-build-smoke-sleeve:${RANDOM}-$$"
+APP_IMAGE_TAG="enclaver-build-smoke-app:${TAG_SUFFIX}"
+RELEASE_IMAGE_TAG="enclaver-build-smoke-release:${TAG_SUFFIX}"
+ODYN_IMAGE_TAG="enclaver-build-smoke-odyn:${TAG_SUFFIX}"
+SLEEVE_IMAGE_TAG="enclaver-build-smoke-sleeve:${TAG_SUFFIX}"
+# Fixture mode intentionally reuses the real published nitro-cli tag because the
+# builder still resolves that default image from a fixed tag with no manifest
+# override. This is acceptable on fresh CI runners; the guard below refuses to
+# overwrite any pre-existing local copy.
 NITRO_CLI_FIXTURE_TAG="public.ecr.aws/d4t4u8d2/sparsity-ai/nitro-cli:latest"
 ENCLAVER_BIN="${ENCLAVER_BIN:-enclaver}"
 ENCLAVER_SMOKE_MODE="${ENCLAVER_SMOKE_MODE:-official}"
@@ -135,14 +150,10 @@ done
 [ -f "${docker_dir}/Dockerfile" ] || { echo "missing Dockerfile under ${docker_dir}" >&2; exit 1; }
 
 read -r first_line < "${docker_dir}/Dockerfile"
-case "${first_line}" in
-    FROM\ enclaver-intermediate-*:latest)
-        ;;
-    *)
-        echo "unexpected docker context line: ${first_line}" >&2
-        exit 1
-        ;;
-esac
+if ! printf '%s\n' "${first_line}" | grep -Eq '^FROM enclaver-intermediate-[^[:space:]]+:latest$'; then
+    echo "unexpected docker context line: ${first_line}" >&2
+    exit 1
+fi
 
 printf 'fixture EIF for %s\n' "${docker_uri}" > "${output_file}"
 printf '{"Measurements":{"PCR0":"fixture-pcr0","PCR1":"fixture-pcr1","PCR2":"fixture-pcr2"}}'

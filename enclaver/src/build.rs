@@ -266,6 +266,7 @@ impl EnclaveArtifactBuilder {
             .write_all(format!("FROM {source_image_ref}\n").as_bytes())
             .await?;
         dockerfile.flush().await?;
+        dockerfile.shutdown().await?;
 
         Ok(docker_context_dir)
     }
@@ -342,24 +343,34 @@ impl EnclaveArtifactBuilder {
             );
         }
 
-        let status_code = nitro_cli.wait_container(&build_container_id).await?;
-        if status_code != 0 {
-            return Err(anyhow!("non-zero exit code from nitro-cli",));
-        }
-
         let mut json_buf = Vec::with_capacity(4096);
-        let mut stdout_stream = nitro_cli.stdout(&build_container_id, false);
+        let status_code = nitro_cli.wait_container(&build_container_id).await?;
 
-        while let Some(line) = stdout_stream.next().await {
-            json_buf.extend_from_slice(line.as_ref());
+        if status_code == 0 {
+            let mut stdout_stream = nitro_cli.stdout(&build_container_id, false);
+
+            while let Some(line) = stdout_stream.next().await {
+                json_buf.extend_from_slice(line.as_ref());
+            }
         }
 
-        // If we make it this far, do a little bit of cleanup
-        nitro_cli.remove_container(&build_container_id).await?;
+        // Always attempt cleanup, even when nitro-cli exits non-zero, so repeated
+        // builds do not accumulate temporary container/image state in the daemon.
+        let remove_container_result = nitro_cli.remove_container(&build_container_id).await;
+        let _ = self
+            .docker
+            .remove_image(&docker_uri, None::<RemoveImageOptions>, None)
+            .await;
         let _ = self
             .docker
             .remove_image(&source_image_ref, None::<RemoveImageOptions>, None)
-            .await?;
+            .await;
+
+        remove_container_result?;
+
+        if status_code != 0 {
+            return Err(anyhow!("non-zero exit code from nitro-cli",));
+        }
 
         Ok(serde_json::from_slice(&json_buf)?)
     }
@@ -394,6 +405,10 @@ impl EnclaveArtifactBuilder {
         name_override: Option<&str>,
         default: &str,
     ) -> Result<ImageRef> {
+        // Internal runtime images now follow the same local-first behavior as app
+        // images unless the user explicitly asks for --pull. This keeps default
+        // builds reproducible against preloaded images, while preserving an escape
+        // hatch for callers that want to refresh latest-tag defaults.
         let (image_name, mut img) = match name_override {
             Some(image_name) => (
                 image_name,
@@ -617,6 +632,17 @@ mod tests {
             "smoke test should support a fixture mode for rate-limit-resistant CI coverage"
         );
         assert!(
+            contents.contains("uuidgen")
+                || contents.contains("openssl rand -hex")
+                || contents.contains("printf '%s-%s'"),
+            "smoke test should use a high-entropy tag suffix strategy with a safe fallback"
+        );
+        assert!(
+            contents.contains("no manifest")
+                && contents.contains("overwrite any pre-existing local copy"),
+            "smoke test should document why fixture mode temporarily reuses the published nitro-cli tag"
+        );
+        assert!(
             contents.contains("/enclave/application.eif")
                 && contents.contains("/enclave/enclaver.yaml"),
             "smoke test should verify the release image contains the packaged EIF bundle"
@@ -685,6 +711,10 @@ mod tests {
         assert!(
             contents.contains("ENCLAVER_SMOKE_MODE: fixture"),
             "CI workflow should run the smoke test in fixture mode to avoid registry rate limits"
+        );
+        assert!(
+            contents.contains("timeout-minutes: 15"),
+            "CI workflow should time out the smoke job instead of relying on the platform default"
         );
         assert!(
             contents.contains("./scripts/enclaver-build-smoke-test.sh"),
