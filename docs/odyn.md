@@ -96,7 +96,7 @@ Odyn automatically sets the following environment variables for your application
 > # Set to false in your base Dockerfile
 > ENV IN_ENCLAVE=false
 > ```
-> Then in your application's layer (added during `enclaver build`), this can be overridden. Or, your application can detect the enclave environment by checking if the Odyn API is available at `http://127.0.0.1:<api_port>/v1/eth/address`.
+> Enclaver does not set or override `IN_ENCLAVE` for you. If you want this convention, set it in your own image variants or entrypoint wrapper. Otherwise, detect the enclave environment by checking whether the Odyn API is available at `http://127.0.0.1:<api_port>/v1/eth/address`.
 
 ---
 
@@ -144,12 +144,12 @@ egress:
   allow:
     - "api.example.com"      # Exact domain
     - "*.amazonaws.com"      # Wildcard subdomain
-    - "169.254.169.254"      # IMDS (required for KMS)
+    - "169.254.169.254"      # IMDS (needed for AWS SDK / S3 region+credential discovery)
   deny:
     - "*.internal.com"       # Block specific patterns
 ```
 
-**For your app**: Most HTTP libraries automatically use `http_proxy`/`https_proxy` environment variables. No code changes needed.
+**For your app**: If your HTTP client honors `http_proxy`/`https_proxy`, no extra code is needed. Otherwise configure the proxy explicitly. The repo's `examples/hn-fetcher/app.js` shows one pattern that reads `HTTPS_PROXY` and constructs a proxy-aware agent.
 
 ---
 
@@ -421,6 +421,11 @@ storage:
     enabled: true
     bucket: "my-app-data"
     prefix: "apps/my-service/"
+  mounts:
+    - name: "appdata"
+      mount_path: "/mnt/appdata"
+      required: true
+      size_mb: 10240
 ```
 
 ---
@@ -430,11 +435,12 @@ storage:
 | Module | Port Config | Purpose | Your App Usage |
 |--------|-------------|---------|----------------|
 | **Ingress** | `ingress[].listen_port` | Accept external connections | Bind to `127.0.0.1:<port>` |
-| **Egress** | `egress.proxy_port` | Make outbound HTTP requests | Automatic via `http_proxy` env var |
+| **Egress** | `egress.proxy_port` | Make outbound HTTP requests | Use a proxy-aware HTTP client or explicit proxy config |
 | **Clock Sync** | `clock_sync.interval_secs` / `clock_sync.enabled` | Keep enclave wall clock aligned with host time | Automatic; no app changes |
 | **Internal API** | `api.listen_port` | Attestation, signing, encryption, KMS/app-wallet, storage | HTTP to `http://127.0.0.1:<port>` |
 | **Aux API** | `aux_api.listen_port` | Restricted API for sidecars and attestation; defaults to `api_port + 1` | HTTP to `http://127.0.0.1:<port>` |
 | **Storage** | `storage.s3.*` | Persistent S3 storage exposed via the Internal API | HTTP to `/v1/s3/...` |
+| **Host-Backed Mounts** | `storage.mounts[]` + runtime `--mount` | Writable enclave directories backed by host loopback images | Normal file APIs under `/mnt/...` |
 | **Helios RPC** | `helios_rpc.chains[].local_rpc_port` | Trustless multi-chain RPC | HTTP to `http://127.0.0.1:<chain_port>` |
 | **Console** | N/A (automatic) | Log streaming | Print to stdout/stderr |
 

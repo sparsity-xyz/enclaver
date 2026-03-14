@@ -42,12 +42,13 @@ The service startup order in `main.rs` is:
 
 Shutdown order is the reverse:
 
-1. Aux API
-2. Primary API
-3. clock sync
+1. ingress
+2. Aux API
+3. Primary API
 4. Helios
-5. ingress
+5. clock sync
 6. egress
+7. hostfs unmount (implicit when the mount service is dropped)
 
 ## Important implementation details
 

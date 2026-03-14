@@ -87,15 +87,14 @@ cargo test --quiet --manifest-path enclaver/Cargo.toml --features=run_enclave,od
 
 `release.yaml` runs on:
 
-- `push` to `sparsity`
-- `push` tags matching `v*`
+- `release` events of type `published`
 - `workflow_dispatch`
 
 Manual workflow inputs:
 
 - `publish_images`
 - `upload_artifacts`
-- `repo` (defaults to `sparsity-xyz/enclaver`)
+- `repo` (declared in the workflow, defaults to `sparsity-xyz/enclaver`, currently not consumed by any job)
 
 Jobs:
 
@@ -112,7 +111,7 @@ Jobs:
 
 2. `publish-images`
    - runs when either:
-     - the repo is exactly `sparsity-xyz/enclaver` and the ref is `sparsity` or a tag
+     - the repo is exactly `sparsity-xyz/enclaver` and the event is `release`
      - a manual dispatch sets `publish_images=true`
    - downloads build artifacts
    - renames target directories to Docker architecture names:
@@ -124,10 +123,10 @@ Jobs:
 
 3. `upload-release-artifact`
    - runs when either:
-     - the repo is `sparsity-xyz/enclaver` and the ref is a tag
+     - the repo is `sparsity-xyz/enclaver` and the event is `release`
      - a manual dispatch sets `upload_artifacts=true`
    - packages only the `x86_64` `enclaver` binary into a release tarball
-   - uploads draft GitHub Release assets plus matching SHA256 files
+   - uploads GitHub Release assets plus matching SHA256 files
 
 Notably:
 
@@ -135,6 +134,7 @@ Notably:
 - the Nitro CLI publish path is currently `linux/amd64` only
 - `nitro-cli.yaml` validates that the nitro-cli image ships a FUSE-enabled enclave kernel and can complete a smoke `build-enclave` before push
 - `ci.yaml` also runs `ENCLAVER_SMOKE_MODE=fixture ./scripts/enclaver-build-smoke-test.sh` to validate that `enclaver build` completes the `--docker-dir` EIF handoff and release-image packaging path on Linux without depending on public-registry pulls during every CI run
+- selected docs, workflows, and helper scripts are also pinned by unit tests in `enclaver/src/build.rs`, so some doc/workflow drift fails CI as a normal test regression
 - the release workflow still does not upload `odyn` or `enclaver-run` as standalone GitHub Release tarballs
 
 ## Local release reproduction
@@ -182,7 +182,9 @@ To run the official publish flow, you need:
 
 - an OIDC trust relationship for GitHub Actions
 - the IAM role referenced by `release.yaml`
-- public ECR repositories for `sparsity-ai/nitro-cli`, `sparsity-ai/odyn`, and `sparsity-ai/sleeve`
+- public ECR repositories for `sparsity-ai/odyn` and `sparsity-ai/sleeve`
+
+If you also run `.github/workflows/nitro-cli.yaml`, that separate workflow needs the public ECR repository for `sparsity-ai/nitro-cli`.
 
 ## References
 

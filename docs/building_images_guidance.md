@@ -5,6 +5,7 @@ This document covers the image-building paths that exist in the repository today
 - local developer images via `scripts/build-docker-images.sh`
 - release-style images via `dockerfiles/*-release.dockerfile`
 - Nitro CLI image rebuilds with a FUSE-enabled enclave kernel
+- the current `enclaver build` handoff from a locally tagged intermediate image to `nitro-cli build-enclave --docker-dir`
 
 ## Prerequisites
 
@@ -67,6 +68,21 @@ This produces:
    ```
 3. copies `odyn` and `enclaver-run` into a temporary Docker build context
 4. builds Odyn and Sleeve images from the selected Dockerfiles
+
+## Current `enclaver build` flow
+
+The current `enclaver build` implementation in `enclaver/src/build.rs` no longer
+hands Nitro CLI an unnamed transient image reference.
+
+Instead it:
+
+1. amends the app image with `/sbin/odyn` and `/etc/enclaver/enclaver.yaml`
+2. tags that amended image locally as `enclaver-intermediate-<uuid>:latest`
+3. writes a tiny temporary Docker context whose `Dockerfile` is just `FROM <that-local-tag>`
+4. runs `nitro-cli build-enclave --docker-dir /build/docker-context --docker-uri enclaver-eif-build-<uuid>:latest`
+
+That keeps the EIF build on the local Docker-daemon path and avoids Nitro CLI
+trying to resolve a temporary image name from a remote registry.
 
 ## Manual developer-image build
 

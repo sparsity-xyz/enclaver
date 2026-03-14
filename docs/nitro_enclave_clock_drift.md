@@ -1,341 +1,84 @@
-# Clock Drift in AWS Nitro Enclaves
+# Clock Drift and Time Sync in Enclaver
 
-## Overview
+## Why this matters
 
-AWS Nitro Enclaves provide a highly isolated execution environment
-designed for sensitive workloads such as key management, cryptography,
-and confidential computing.
+Long-running enclaves can drift relative to the parent instance's wall clock.
+That matters for time-sensitive behavior such as:
 
-However, one operational characteristic developers should be aware of is
-**clock drift inside the enclave**.
+- JWT validation
+- TLS certificate checks
+- expiry windows
+- any protocol that compares wall-clock timestamps
 
-Because of the strict isolation model, **Nitro Enclaves do not
-automatically synchronize their system clock with the host after
-startup**. As a result, the enclave's time may gradually diverge from
-the parent instance's time.
+Enclaver includes host-assisted clock sync so applications do not need to build
+this plumbing themselves.
 
-This document explains:
+## What Enclaver does today
 
--   Why clock drift occurs
--   Known reports from the community
--   Potential risks
--   Recommended mitigation strategies
+When clock sync is effectively enabled:
 
-------------------------------------------------------------------------
+- `enclaver-run` starts a host-side VSOCK time server before launching the enclave
+- `odyn` performs an initial sync during startup
+- `odyn` keeps syncing periodically after startup
+- the default interval is 300 seconds when `clock_sync` is omitted
+- the client estimates RTT and clock offset from host receive/transmit timestamps before calling `clock_settime(CLOCK_REALTIME, ...)`
 
-# Nitro Enclave Time Model
+Relevant implementation files:
 
-Nitro Enclaves are intentionally designed with minimal external
-dependencies.
+- `enclaver/src/run.rs`
+- `enclaver/src/bin/odyn/clock_sync.rs`
+- `enclaver/src/runtime_vsock.rs`
+- `enclaver/src/manifest.rs`
 
-Key isolation properties include:
+## Default behavior
 
--   No network access
--   No direct access to host OS
--   Communication only through **vsock**
--   Limited device access
+Clock sync is default-on.
 
-Because of these restrictions, the enclave **cannot use NTP or other
-time synchronization services**.
+- omitting `clock_sync` keeps clock sync enabled
+- `clock_sync: {}` also keeps the default behavior
+- `clock_sync.enabled: false` disables the feature
+- `clock_sync.interval_secs` changes the periodic sync interval
 
-### Time initialization
+Examples:
 
-When an enclave starts, it receives an **initial snapshot of the host
-system time**.
+```yaml
+# Keep defaults by omitting the block entirely
 
-    enclave_time = host_time_at_start + local_clock_drift
+clock_sync:
+  enabled: false
+```
 
-After startup:
+```yaml
+clock_sync:
+  interval_secs: 60
+```
 
--   The enclave clock **runs independently**
--   It **does not automatically synchronize with the host**
+## Failure behavior
 
-Over time, this leads to **clock drift**.
+The current implementation is intentionally resilient:
 
-------------------------------------------------------------------------
+- `odyn` retries the initial sync up to 10 times with a 2-second delay between attempts
+- periodic sync failures are logged and retried on the next interval
+- on the host side, Enclaver first retries managed CID selection when the clock-sync VSOCK listener collides
+- if the host-side retry budget is exhausted and only clock sync is still conflicting, the enclave can still continue without a dedicated clock-sync listener
 
-# Observed Clock Drift
+## What clock sync does not guarantee
 
-Clock drift in Nitro Enclaves has been observed in real production
-environments.
+Clock sync improves operational correctness, but it is not a trusted time root.
 
-For example, Evervault documented this issue while building
-enclave-based infrastructure.
+- the enclave follows the parent instance's wall clock
+- if the parent instance time is wrong, the synced enclave time is also wrong
+- applications that only need elapsed-time measurement should still prefer monotonic time for that purpose
 
-Their findings indicated:
+## Operational guidance
 
--   Approximately **7 seconds of drift per week**
+- leave clock sync enabled unless you have a deliberate reason to disable it
+- if your application depends on JWTs, TLS, or timestamped credentials, verify those flows with clock sync enabled
+- if you disable clock sync, expect long-running enclaves to diverge over time and plan for that explicitly
 
-While this drift is relatively small, it can cause problems for systems
-that rely on accurate wall-clock time.
+## Related documents
 
-Example affected systems:
-
--   JWT token validation
--   TLS certificate verification
--   cryptographic signature expiration
--   time-based authentication
-
-------------------------------------------------------------------------
-
-# Why Nitro Enclaves Do Not Provide Trusted Wall Clock
-
-This behavior is not unique to Nitro Enclaves. Most Trusted Execution
-Environments (TEEs) **do not provide a trusted wall clock**.
-
-  TEE              Trusted Wall Clock
-  ---------------- --------------------
-  SGX              No
-  TDX              No
-  SEV-SNP          No
-  Nitro Enclaves   No
-
-The reason is that **time is external state**.
-
-If the host or infrastructure provider is malicious, time could be
-manipulated.
-
-Because of this, TEE security models typically assume:
-
-> Wall clock time is not trustworthy.
-
-Instead, protocols rely on:
-
--   monotonic counters
--   nonces
--   expiration windows
--   cryptographic freshness guarantees
-
-------------------------------------------------------------------------
-
-# Attestation Timestamp Limitations
-
-Nitro Enclave attestation documents contain a `timestamp` field.
-
-Example fields in an attestation document:
-
--   PCR measurements
--   nonce
--   enclave public key
--   timestamp
-
-However:
-
--   This timestamp reflects the time **when the attestation document was
-    generated**
--   It should **not be treated as a globally trusted time source**
-
-It is mainly used together with **nonces or short validity windows** to
-prevent replay attacks.
-
-------------------------------------------------------------------------
-
-# Practical Issues Caused by Clock Drift
-
-Clock drift may lead to failures in several common scenarios.
-
-### JWT Validation
-
-JWT tokens typically contain:
-
-    exp
-    nbf
-    iat
-
-If enclave time drifts, validation may fail with errors like:
-
-    token not yet valid
-    token expired
-
-------------------------------------------------------------------------
-
-### TLS Certificate Validation
-
-If TLS verification is performed inside the enclave, certificate checks
-may fail:
-
-    certificate not yet valid
-    certificate expired
-
-------------------------------------------------------------------------
-
-### Cryptographic Protocols
-
-Some protocols depend on timestamp-based freshness checks.
-
-Clock drift may cause:
-
--   signature validation failures
--   authentication errors
--   protocol timeouts
-
-------------------------------------------------------------------------
-
-# Recommended Time Synchronization Approaches
-
-There are several strategies to mitigate clock drift.
-
-## 1. Synchronize Time via Host (Common Approach)
-
-The most common approach is to synchronize enclave time with the host
-via **vsock**.
-
-Architecture:
-
-    Amazon Time Sync Service (host)
-              │
-              │
-           Parent Instance
-              │
-              │ vsock
-              ▼
-           Nitro Enclave
-           Time Sync Agent
-
-Example workflow:
-
-    loop every 30 seconds:
-        request host_time via vsock
-        update enclave clock
-
-This approach is simple and widely used in production deployments.
-
-------------------------------------------------------------------------
-
-## 2. Use the PTP Device
-
-Nitro instances expose a **Precision Time Protocol (PTP) device**:
-
-    /dev/ptp0
-
-Developers can run time synchronization services such as:
-
--   chrony
--   PTP client implementations
-
-Benefits:
-
--   microsecond-level synchronization
--   recommended by AWS for high-precision timing
-
-Limitations:
-
--   requires additional configuration
-
-------------------------------------------------------------------------
-
-## 3. Use Monotonic Time Only
-
-If the application does not require wall-clock time, it may be better to
-rely on **monotonic time**.
-
-Example use cases:
-
--   measuring elapsed time
--   retry timeouts
--   protocol sequencing
-
-Monotonic clocks avoid many problems caused by time manipulation or
-drift.
-
-------------------------------------------------------------------------
-
-# Enclaver Built-In Clock Sync
-
-Enclaver implements the first approach above out of the box.
-
-How it works today:
-
--   `enclaver-run` starts a host-side VSOCK time server before launching
-    the enclave
--   `odyn` performs an initial sync on boot, then continues syncing
-    periodically
--   The sync logic estimates **offset** and **round-trip time (RTT)**
-    using host receive/transmit timestamps before calling
-    `clock_settime`
--   Clock sync is **enabled by default**
-
-Default behavior:
-
--   If `clock_sync` is omitted from `enclaver.yaml`, Enclaver still
-    syncs time every **300 seconds**
--   Use `clock_sync.enabled: false` only if you want to disable this
-    behavior
--   Use `clock_sync.interval_secs` only if you want a different sync
-    interval
-
-Example:
-
-    # Keep default behavior: omit the block entirely
-
-    # Disable clock sync
-    clock_sync:
-      enabled: false
-
-    # Keep clock sync enabled, but sync every minute
-    clock_sync:
-      interval_secs: 60
-
-Important limitation:
-
--   This improves operational correctness for JWT/TLS/expiry checks
--   It does **not** create a cryptographically trusted time source
--   The enclave is still following the parent instance's wall clock
-
-------------------------------------------------------------------------
-
-# Enclave Restart Behavior
-
-Another important characteristic:
-
-When an enclave starts or restarts, its time is reinitialized from the
-host.
-
-    start enclave
-         │
-         ▼
-    enclave_time = host_time_snapshot
-
-Therefore:
-
-  Enclave Lifetime        Drift Impact
-  ----------------------- -------------------
-  Short-lived enclaves    Minimal
-  Long-running enclaves   Drift accumulates
-
-Many production systems restart enclaves periodically to avoid long-term
-drift.
-
-------------------------------------------------------------------------
-
-# Summary
-
-Nitro Enclave clock behavior can be summarized as follows.
-
-  Property                    Behavior
-  --------------------------- ----------------------
-  Independent clock           Yes
-  Automatic synchronization   No
-  Clock drift possible        Yes
-  Typical observed drift      \~7 seconds per week
-  Recommended mitigation      Host sync or PTP
-
-Developers building enclave-based systems should explicitly account for
-time synchronization when designing their infrastructure.
-
-For Enclaver users, the operational default is already to synchronize
-time with the host unless you disable it explicitly.
-
-------------------------------------------------------------------------
-
-# Key Takeaways
-
--   Nitro Enclaves **do not automatically synchronize system time**
--   Clock drift is **expected behavior**
--   Drift has been observed in real production deployments
--   Applications relying on accurate time must implement synchronization
-    mechanisms
--   Trusted wall clocks are generally **not available in TEEs**
-
-Proper time handling is essential when building secure systems on
-confidential computing platforms.
+- `docs/odyn.md`
+- `docs/odyn_details.md`
+- `docs/vsock_runtime.md`
+- `docs/enclaver.yaml`

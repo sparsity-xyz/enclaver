@@ -31,6 +31,9 @@ Packages a Docker image into a self-executing Enclaver container image.
 | `-f`, `--file <PATH>` | Path to the Enclaver manifest file (`enclaver.yaml`). Defaults to `enclaver.yaml` in the current directory. Pass `-` to read from stdin. |
 | `--pull` | Always pull the source Docker images to ensure the latest versions are used. |
 
+Without `--pull`, `enclaver build` is local-first: it reuses locally available
+app, odyn, sleeve, and nitro-cli images when present and pulls only missing refs.
+
 #### Example
 ```bash
 enclaver build -f my-service.yaml
@@ -46,7 +49,7 @@ Runs a pre-packaged Enclaver container image. This command simplifies the `docke
 
 | Option | Description |
 |--------|-------------|
-| `-f`, `--file <PATH>` | Enclaver manifest file. If provided, `enclaver` will look up the `target` image name from this file. |
+| `-f`, `--file <PATH>` | Enclaver manifest file. If provided, `enclaver` will look up the `target` image name from this file. It also supplies `storage.mounts[]` metadata when `--mount` is used. |
 | `image` (positional) | Name of a pre-existing Enclaver image to run. Only used if `-f` is not specified. |
 | `-p`, `--publish <PORT_MAP>` | Port to expose on the host machine (e.g., `8080:80`). Can be used multiple times. |
 | `-d`, `--debug-mode` | Enable debug mode for the enclave supervisor. |
@@ -90,7 +93,7 @@ sudo enclaver run -f enclaver.yaml --mount appdata=/var/lib/my-service/appdata
 
 ## Notes
 
-- **Privileges**: Running enclaves requires `sudo` or root permissions to access `/dev/nitro_enclaves`.
+- **Privileges**: Running enclaves requires Docker/device access to `/dev/nitro_enclaves`. Many setups use `sudo enclaver run ...`.
 - **Docker Dependency**: `enclaver run` requires a running Docker daemon.
 - **Multiple instances on one EC2**: separate `enclaver run` processes can coexist on the same EC2 because `enclaver-run` derives host-side VSOCK listeners from an automatically managed enclave CID. Docker `-p` host ports still must not overlap.
 - **Port Model**: For full details on `ingress` vs `--publish` and the host/container/enclave mapping layers, see [Port Handling](port_handling.md).

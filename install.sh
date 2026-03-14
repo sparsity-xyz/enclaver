@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Enclaver installer script
-# Usage: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sparsity-xyz/enclaver/main/install.sh)"
+# Usage: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sparsity-xyz/enclaver/refs/heads/sparsity/install.sh)"
 
 set -e
 
@@ -56,7 +56,8 @@ detect_platform() {
             arch="x86_64"
             ;;
         aarch64|arm64)
-            arch="aarch64"
+            log_error "Linux arm64 releases are not published yet (current release artifacts are x86_64-only)"
+            exit 1
             ;;
         *)
             log_error "Unsupported architecture: $(uname -m)"
