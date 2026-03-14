@@ -1,41 +1,60 @@
-const express = require('express');
-const axios = require('axios');
-const https_proxy_agent = require("https-proxy-agent");
+const express = require("express");
+const axios = require("axios");
+const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const app = express();
-const port = 8000;
+const port = Number(process.env.PORT || 8000);
+const upstreamUrl = "https://news.ycombinator.com";
 
-app.get('/', (req, resOuter) => {
-  console.log('Request received!');
-  // Only construct the proxy agent if HTTPS_PROXY is set. Passing undefined to
-  // HttpsProxyAgent causes a TypeError (cannot read 'href').
+function buildUpstreamRequestConfig() {
   const httpsProxy = process.env.HTTPS_PROXY || process.env.https_proxy;
-  const opts = {};
+  const config = {
+    timeout: 15000,
+    responseType: "text",
+    validateStatus: () => true,
+    headers: {
+      "user-agent": "hn-fetcher-example/1.0",
+    },
+  };
 
-  if (httpsProxy) {
-    const agent = new https_proxy_agent.HttpsProxyAgent(httpsProxy);
-    opts.httpsAgent = agent;
-    // when using a custom agent, disable axios' proxy option so it doesn't try
-    // to use the proxy setting again
-    opts.proxy = false;
+  if (!httpsProxy) {
+    return config;
   }
 
-  axios.get('https://news.ycombinator.com', opts)
-    .then((resInner) => {
-      const status = resInner.status;
-      const contentType = resInner.headers['content-type'];
-      const data = resInner.data;
+  config.httpsAgent = new HttpsProxyAgent(httpsProxy);
+  // When a custom agent is used, disable axios' own proxy handling to avoid
+  // applying proxy configuration twice.
+  config.proxy = false;
+  return config;
+}
 
-      resOuter.status(status);
-      resOuter.set('content-type', contentType);
-      resOuter.send(data);
-    })
-    .catch((err) => {
-      console.error('Fetch failed:', err && err.stack ? err.stack : err);
-      resOuter.status(502).send('Bad gateway');
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    upstream: upstreamUrl,
+  });
+});
+
+app.get("/", async (_req, res) => {
+  console.log(`Forwarding request to ${upstreamUrl}`);
+
+  try {
+    const upstream = await axios.get(upstreamUrl, buildUpstreamRequestConfig());
+    const contentType = upstream.headers["content-type"];
+
+    res.status(upstream.status);
+    if (contentType) {
+      res.set("content-type", contentType);
+    }
+    res.send(upstream.data);
+  } catch (err) {
+    console.error("Fetch failed:", err && err.stack ? err.stack : err);
+    res.status(502).json({
+      error: "upstream_fetch_failed",
     });
-})
+  }
+});
 
 app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`);
+  console.log(`hn-fetcher listening on port ${port}`);
 });
