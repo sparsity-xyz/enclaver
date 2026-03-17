@@ -142,9 +142,43 @@ The current implementation supports the common file and directory path:
 - rename
 - fsync/statfs
 
-Symlink and xattr management are not first-class operations. Existing symlinks
-are surfaced in metadata and directory listings, but explicit `readlink`,
-`symlink`, and xattr operations return `ENOSYS`.
+The current implementation does not expose the full POSIX/Linux filesystem
+surface area.
+
+- symlink and xattr management are not first-class operations. Existing
+  symlinks are surfaced in metadata and directory listings, but explicit
+  `readlink`, `symlink`, and xattr operations return `ENOSYS`
+- `chmod`, `chown`, `chgrp`, and explicit timestamp-setting operations are not
+  implemented
+- hard links and special files such as device nodes, FIFOs, and sockets are not
+  first-class operations
+
+### Compared with a Local Linux Directory
+
+For normal application data I/O, the mount behaves much like a regular Linux
+directory. For metadata-heavy or POSIX-specific workloads, there are important
+differences:
+
+- permissions are simplified rather than faithfully preserved. In practice, the
+  enclave sees synthetic mode bits for regular files and directories instead of
+  a full local-filesystem permission model
+- ownership metadata is simplified. Tools inside the enclave should not assume
+  that `uid`, `gid`, link count, or creation/change timestamps behave exactly
+  like a native ext4 or xfs mount
+- filesystem statistics are partial. Capacity and free-space reporting are
+  available, but inode-oriented tooling should not expect the same fidelity as a
+  local filesystem
+- non-UTF-8 filenames are not a first-class use case because the current hostfs
+  protocol is JSON-string based
+- performance is closer to a remote filesystem than a local disk mount.
+  Metadata-heavy workloads, many small files, or frequent open/stat/close
+  patterns will be noticeably slower than a native Linux directory
+
+In short: ordinary file reads, writes, directory creation, deletion, and rename
+operations are a good fit; software that depends on full POSIX metadata
+semantics, xattrs, hard links, special files, or local-filesystem performance
+should not treat this mount as a drop-in replacement for a native Linux
+filesystem.
 
 ## Implementation Notes
 
