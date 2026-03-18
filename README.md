@@ -1,3 +1,12 @@
+> [!IMPORTANT]
+> This repository has been superseded by **[nova-enclave-capsule](https://github.com/sparsity-xyz/nova-enclave-capsule)** and is no longer the active project.
+>
+> Please use the new repository going forward:
+>
+> **https://github.com/sparsity-xyz/nova-enclave-capsule**
+>
+> This repository is archived and kept only for historical reference.
+> 
 <p align="center">
   <img src="docs/img/enclaver-logo-color.png" width="350" />
 </p>
